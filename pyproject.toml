@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pact-ax"
+version = "0.1.0"
+description = "PACT Agent Collaboration Layer - Multi-Agent Coordination Protocol"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "NeuroBloom.ai", email = "hello@neurobloom.ai"}]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "pydantic>=2.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "httpx>=0.24.0",
+    "cryptography>=41.0.0",
+    "redis>=4.5.0",
+    "asyncio-mqtt>=0.13.0",
+    "python-multipart>=0.0.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/neurobloom/pact-ax"
+Repository = "https://github.com/neurobloom/pact-ax"
+Documentation = "https://docs.neurobloom.ai/pact-ax"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pact_ax*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.8"
+strict = true
+warn_return_any = true
+warn_unused_configs = true

@@ -2,12 +2,8 @@
   "name": "pact-ax",
   "version": "1.0.0",
   "scripts": {
-    "demo": "ts-node --esm src/demo/server.ts",
-    "dev": "nodemon --exec ts-node --esm src/demo/server.ts"
-  },
-  "ts-node": {
-    "esm": true,
-    "experimentalSpecifierResolution": "node"
+    "demo": "ts-node src/demo/server.ts",
+    "dev": "nodemon src/demo/server.ts"
   },
   "type": "commonjs",
   "dependencies": {

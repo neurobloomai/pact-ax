@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "demo": "ts-node src/demo/server.ts",
+    "dev": "nodemon src/demo/server.ts"
+  }
+}

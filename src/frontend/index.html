@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>neurobloom.ai - PACT Protocol Demo</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.0/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #2563eb;
+            margin-bottom: 10px;
+        }
+
+        .header .subtitle {
+            font-size: 1.2rem;
+            color: #64748b;
+            margin-bottom: 20px;
+        }
+
+        .scenario-info {
+            background: #f1f5f9;
+            border-radius: 12px;
+            padding: 20px;
+            border-left: 4px solid #2563eb;
+        }
+
+        .scenario-info h3 {
+            color: #1e293b;
+            margin-bottom: 10px;
+        }
+
+        .scenario-info p {
+            color: #475569;
+            line-height: 1.6;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .stakeholder-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .stakeholder-panel h2 {
+            color: #1e293b;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+        }
+
+        .stakeholder-list {
+            space-y: 15px;
+        }
+
+        .stakeholder-item {
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 15px;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .stakeholder-item:hover {
+            border-color: #3b82f6;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(59, 130, 246, 0.2);
+        }
+
+        .stakeholder-item.connected {
+            border-color: #10b981;
+            background: #ecfdf5;
+        }
+
+        .stakeholder-item.contributing {
+            border-color: #f59e0b;
+            background: #fffbeb;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .stakeholder-header {
+            display: flex;
+            justify-content: between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .stakeholder-name {
+            font-weight: 600;
+            color: #1e293b;
+        }
+
+        .stakeholder-role {
+            background: #3b82f6;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stakeholder-role.technical { background: #8b5cf6; }
+        .stakeholder-role.policy { background: #06b6d4; }
+        .stakeholder-role.defense { background: #dc2626; }
+        .stakeholder-role.ethics { background: #059669; }
+
+        .stakeholder-org {
+            color: #64748b;
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+        }
+
+        .stakeholder-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #64748b;
+        }
+
+        .status-indicator.online { background: #10b981; }
+        .status-indicator.contributing { background: #f59e0b; }
+
+        .consensus-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .consensus-meter {
+            margin-bottom: 25px;
+        }
+
+        .consensus-meter h3 {
+            color: #1e293b;
+            margin-bottom: 10px;
+        }
+
+        .meter-bar {
+            background: #e2e8f0;
+            height: 12px;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .meter-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #dc2626 0%, #f59e0b 50%, #10b981 100%);
+            width: 0%;
+            transition: width 1s ease;
+        }
+
+        .meter-value {
+            color: #475569;
+            font-weight: 600;
+        }
+
+        .consensus-details {
+            margin-bottom: 20px;
+        }
+
+        .detail-section {
+            margin-bottom: 15px;
+        }
+
+        .detail-section h4 {
+            color: #374151;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .detail-list {
+            list-style: none;
+        }
+
+        .detail-list li {
+            background: #f1f5f9;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 4px;
+            color: #475569;
+            font-size: 0.9rem;
+        }
+
+        .convergence-item {
+            border-left: 3px solid #10b981;
+        }
+
+        .conflict-item {
+            border-left: 3px solid #dc2626;
+        }
+
+        .action-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        .demo-button {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            text-align: center;
+            display: inline-block;
+        }
+
+        .demo-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(59, 130, 246, 0.4);
+        }
+
+        .demo-button.secondary {
+            background: linear-gradient(135deg, #64748b, #475569);
+        }
+
+        .demo-button.success {
+            background: linear-gradient(135deg, #10b981, #059669);
+        }
+
+        .demo-button.warning {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+        }
+
+        .live-feed {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            margin-top: 30px;
+        }
+
+        .live-feed h2 {
+            color: #1e293b;
+            margin-bottom: 15px;
+        }
+
+        .feed-item {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            border-left: 3px solid #3b82f6;
+        }
+
+        .feed-timestamp {
+            color: #64748b;
+            font-size: 0.8rem;
+            margin-bottom: 4px;
+        }
+
+        .feed-message {
+            color: #374151;
+        }
+
+        .status-bar {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            z-index: 1000;
+        }
+
+        .status-bar.connected {
+            background: rgba(16, 185, 129, 0.9);
+        }
+
+        .status-bar.error {
+            background: rgba(220, 38, 38, 0.9);
+        }
+
+        @media (max-width: 768px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .action-section {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="status-bar" id="connectionStatus">Connecting...</div>
+    
+    <div class="container">
+        <div class="header">
+            <h1>neurobloom.ai</h1>
+            <p class="subtitle">PACT Protocol Engine - AI Safety Decision-Making Demo</p>
+            
+            <div class="scenario-info">
+                <h3>Current Scenario: GPT-5 Deployment Decision</h3>
+                <p>Multi-stakeholder collaboration to determine deployment readiness of GPT-5. Watch as technical experts, policy advisors, defense analysts, and ethics board members work together using neurobloom.ai's PACT protocols to reach consensus on critical AI safety decisions.</p>
+            </div>
+        </div>
+
+        <div class="main-grid">
+            <div class="stakeholder-panel">
+                <h2>Stakeholders</h2>
+                <div class="stakeholder-list" id="stakeholderList">
+                    <!-- Stakeholders will be populated by JavaScript -->
+                </div>
+            </div>
+
+            <div class="consensus-panel">
+                <div class="consensus-meter">
+                    <h3>Consensus Formation</h3>
+                    <div class="meter-bar">
+                        <div class="meter-fill" id="consensusMeter"></div>
+                    </div>
+                    <div class="meter-value" id="consensusValue">0% alignment</div>
+                </div>
+
+                <div class="consensus-details">
+                    <div class="detail-section">
+                        <h4>Convergence Areas</h4>
+                        <ul class="detail-list" id="convergenceList">
+                            <li class="convergence-item">Waiting for stakeholder input...</li>
+                        </ul>
+                    </div>
+
+                    <div class="detail-section">
+                        <h4>Areas of Tension</h4>
+                        <ul class="detail-list" id="conflictList">
+                            <li class="conflict-item">Analysis in progress...</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="action-section">
+            <a href="/demo/technical" class="demo-button" target="_blank">Technical Interface</a>
+            <a href="/demo/policy" class="demo-button secondary" target="_blank">Policy Interface</a>
+            <a href="/demo/defense" class="demo-button warning" target="_blank">Defense Interface</a>
+            <a href="/demo/ethics" class="demo-button success" target="_blank">Ethics Interface</a>
+        </div>
+
+        <div class="live-feed">
+            <h2>Live Collaboration Feed</h2>
+            <div id="liveFeed">
+                <div class="feed-item">
+                    <div class="feed-timestamp">System</div>
+                    <div class="feed-message">PACT Protocol Engine initialized. Waiting for stakeholder connections...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Socket.IO connection
+        const socket = io();
+        
+        let currentDecisionId = 'gpt5-deployment-2024';
+        let stakeholders = [];
+        let liveFeedElement = document.getElementById('liveFeed');
+        let stakeholderListElement = document.getElementById('stakeholderList');
+
+        // Connection status
+        const statusBar = document.getElementById('connectionStatus');
+        
+        socket.on('connect', () => {
+            statusBar.textContent = 'Connected to PACT Engine';
+            statusBar.className = 'status-bar connected';
+            addLiveFeedItem('System', 'Connected to neurobloom.ai PACT Protocol Engine');
+            loadInitialData();
+        });
+
+        socket.on('disconnect', () => {
+            statusBar.textContent = 'Disconnected';
+            statusBar.className = 'status-bar error';
+            addLiveFeedItem('System', 'Connection lost. Attempting to reconnect...');
+        });
+
+        // Load initial demo data
+        async function loadInitialData() {
+            try {
+                // Load stakeholders
+                const stakeholderResponse = await fetch('/api/stakeholders');
+                const stakeholderData = await stakeholderResponse.json();
+                stakeholders = stakeholderData.stakeholders;
+                renderStakeholders();
+
+                // Load current decision state
+                loadDecisionState();
+                
+                addLiveFeedItem('System', `Loaded ${stakeholders.length} stakeholders for GPT-5 deployment decision`);
+            } catch (error) {
+                console.error('Failed to load initial data:', error);
+                addLiveFeedItem('System', 'Error loading demo data');
+            }
+        }
+
+        // Render stakeholders
+        function renderStakeholders() {
+            stakeholderListElement.innerHTML = stakeholders.map(stakeholder => `
+                <div class="stakeholder-item ${stakeholder.connectionStatus}" onclick="connectAsStakeholder('${stakeholder.id}')">
+                    <div class="stakeholder-header">
+                        <div class="stakeholder-name">${stakeholder.displayName}</div>
+                        <div class="stakeholder-role ${stakeholder.role}">${stakeholder.role}</div>
+                    </div>
+                    <div class="stakeholder-org">${stakeholder.organizationId}</div>
+                    <div class="stakeholder-status">
+                        <div class="status-indicator ${stakeholder.connectionStatus}"></div>
+                        <span>${stakeholder.connectionStatus} • Trust: ${stakeholder.trustLevel}% • ${stakeholder.securityClearance}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Connect as stakeholder (demo simulation)
+        function connectAsStakeholder(stakeholderId) {
+            socket.emit('stakeholder:connect', { stakeholderId });
+            
+            // Update stakeholder status
+            const stakeholder = stakeholders.find(s => s.id === stakeholderId);
+            if (stakeholder) {
+                stakeholder.connectionStatus = 'online';
+                renderStakeholders();
+                addLiveFeedItem('Connection', `${stakeholder.displayName} joined the decision process`);
+            }
+        }
+
+        // Load current decision state
+        async function loadDecisionState() {
+            try {
+                const response = await fetch(`/api/decisions/${currentDecisionId}/state`);
+                const data = await response.json();
+                updateConsensusDisplay(data.state);
+            } catch (error) {
+                console.error('Failed to load decision state:', error);
+            }
+        }
+
+        // Update consensus display
+        function updateConsensusDisplay(state) {
+            const consensusMeter = document.getElementById('consensusMeter');
+            const consensusValue = document.getElementById('consensusValue');
+            const convergenceList = document.getElementById('convergenceList');
+            const conflictList = document.getElementById('conflictList');
+
+            // Update consensus meter
+            consensusMeter.style.width = `${state.overallAlignment}%`;
+            consensusValue.textContent = `${state.overallAlignment}% alignment`;
+
+            // Update convergence areas
+            if (state.convergenceAreas.length > 0) {
+                convergenceList.innerHTML = state.convergenceAreas.map(area => 
+                    `<li class="convergence-item">${area}</li>`
+                ).join('');
+            } else {
+                convergenceList.innerHTML = '<li class="convergence-item">Awaiting stakeholder contributions...</li>';
+            }
+
+            // Update conflict points
+            if (state.conflictPoints.length > 0) {
+                conflictList.innerHTML = state.conflictPoints.map(conflict => 
+                    `<li class="conflict-item">${conflict}</li>`
+                ).join('');
+            } else {
+                conflictList.innerHTML = '<li class="conflict-item">No major conflicts detected</li>';
+            }
+
+            // Show synthesized view if available
+            if (state.synthesizedView) {
+                addLiveFeedItem('Synthesis', state.synthesizedView);
+            }
+        }
+
+        // Socket event handlers
+        socket.on('stakeholder_connected', (data) => {
+            addLiveFeedItem('Connection', `${data.stakeholder} (${data.role}) joined the collaboration`);
+        });
+
+        socket.on('contribution:submitted', (data) => {
+            addLiveFeedItem('Contribution', `New assessment submitted for review`);
+            loadDecisionState(); // Refresh consensus data
+        });
+
+        socket.on('consensus_update', (data) => {
+            updateConsensusDisplay(data.consensusState);
+            addLiveFeedItem('Consensus', `Alignment updated: ${data.consensusState.alignment}%`);
+        });
+
+        socket.on('translation:received', (data) => {
+            addLiveFeedItem('Translation', `Cross-domain translation generated between stakeholder groups`);
+        });
+
+        socket.on('decision:status_updated', (data) => {
+            addLiveFeedItem('Decision', `Decision status updated to: ${data.newStatus}`);
+        });
+
+        // Add item to live feed
+        function addLiveFeedItem(type, message) {
+            const timestamp = new Date().toLocaleTimeString();
+            const feedItem = document.createElement('div');
+            feedItem.className = 'feed-item';
+            feedItem.innerHTML = `
+                <div class="feed-timestamp">${timestamp} • ${type}</div>
+                <div class="feed-message">${message}</div>
+            `;
+            
+            liveFeedElement.insertBefore(feedItem, liveFeedElement.firstChild);
+            
+            // Keep only last 10 items
+            while (liveFeedElement.children.length > 10) {
+                liveFeedElement.removeChild(liveFeedElement.lastChild);
+            }
+        }
+
+        // Auto-refresh decision state every 5 seconds
+        setInterval(loadDecisionState, 5000);
+
+        // Demo simulation - auto-connect stakeholders after 3 seconds
+        setTimeout(() => {
+            if (stakeholders.length > 0) {
+                addLiveFeedItem('Demo', 'Auto-connecting stakeholders for demonstration...');
+                stakeholders.forEach((stakeholder, index) => {
+                    setTimeout(() => connectAsStakeholder(stakeholder.id), index * 1000);
+                });
+            }
+        }, 3000);
+    </script>
+</body>
+</html>

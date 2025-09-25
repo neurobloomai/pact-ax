@@ -76,7 +76,7 @@ export class PACTProtocolEngine extends EventEmitter {
   private decisions: Map<string, DecisionContext> = new Map();
   private consensusStates: Map<string, ConsensusState> = new Map();
   private messageHistory: Map<string, PACTMessage[]> = new Map();
-  private io: SocketIOServer;
+  public io: SocketIOServer;
 
   constructor(server?: any) {
     super();

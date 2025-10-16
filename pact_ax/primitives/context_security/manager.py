@@ -143,7 +143,7 @@ class ContextSecurityManager:
     Provides trust-aware security that adapts to collaboration patterns while maintaining protection.
     """
     
-    def __init__(self, agent_identity: AgentIdentity, security_policy: SecurityPolicy = SecurityPolicy.TRUST_BASED),story_keeper: Optional[StoryKeeper] = None):
+    def __init__(self, agent_identity: AgentIdentity, security_policy: SecurityPolicy = SecurityPolicy.TRUST_BASED,story_keeper: Optional[StoryKeeper] = None):
         self.agent_identity = agent_identity
         self.security_policy = security_policy
         self.story_keeper = story_keeper

@@ -21,6 +21,7 @@ from ..context_share.schemas import (
     CollaborationOutcome, ContextMetadata
 )
 from ..context_share.encryption import TrustAwareEncryption, EncryptionLevel
+from ..story_keeper import StoryKeeper
 
 
 class SecurityEventType(Enum):
@@ -143,7 +144,10 @@ class ContextSecurityManager:
     Provides trust-aware security that adapts to collaboration patterns while maintaining protection.
     """
     
-    def __init__(self, agent_identity: AgentIdentity, security_policy: SecurityPolicy = SecurityPolicy.TRUST_BASED,story_keeper: Optional[StoryKeeper] = None):
+    def __init__(self, 
+                 agent_identity: AgentIdentity, 
+                 security_policy: SecurityPolicy = SecurityPolicy.TRUST_BASED,
+                 story_keeper: Optional[StoryKeeper] = None):
         self.agent_identity = agent_identity
         self.security_policy = security_policy
         self.story_keeper = story_keeper
@@ -540,7 +544,7 @@ class ContextSecurityManager:
         
         return any(keyword in payload_str for keyword in suspicious_keywords)
     
-   def _record_security_event(self, 
+    def _record_security_event(self, 
                              event_type: SecurityEventType,
                              agent_from: Optional[str] = None,
                              agent_to: Optional[str] = None,
@@ -588,7 +592,6 @@ class ContextSecurityManager:
             try:
                 handler(event)
             except Exception as e:
-                # Don't let handler failures break security operations
                 print(f"Event handler failed: {e}")
     
     def _learn_from_security_decision(self, 
@@ -729,19 +732,9 @@ class ContextSecurityManager:
 
 # Example usage and testing
 if __name__ == "__main__":
-    from ..story_keeper import StoryKeeper  # Add import
+    from ..context_share.schemas import Priority
     
-    # Create story keeper for security narrative
-    security_story = StoryKeeper("security-test-agent")
-    
-    # Pass it to security manager
-    security_manager = ContextSecurityManager(
-        agent, 
-        SecurityPolicy.TRUST_BASED,
-        story_keeper=security_story  # ← Add this
-    )
-    
-    # Create security manager for an agent
+    # Create agent identity
     agent = AgentIdentity(
         agent_id="security-test-agent",
         agent_type="test_agent",
@@ -749,6 +742,15 @@ if __name__ == "__main__":
         capabilities=["natural_language", "decrypt_task_knowledge", "decrypt_emotional_state"]
     )
     
+    # Create story keeper for security narrative
+    security_story = StoryKeeper("security-test-agent")
+    
+    # Create security manager with story keeper
+    security_manager = ContextSecurityManager(
+        agent, 
+        SecurityPolicy.TRUST_BASED,
+        story_keeper=security_story
+    )
     
     # Create a test context packet
     test_packet = ContextPacket(
@@ -804,6 +806,12 @@ if __name__ == "__main__":
         print(f"\nThreat Assessment:")
         print(f"Overall threat level: {threat_assessment.overall_threat_level.value}")
         print(f"Confidence score: {threat_assessment.confidence_score}")
+        
+        # Show story summary
+        print("\nSecurity Story Summary:")
+        story_summary = security_story.get_story_summary()
+        print(f"Current Arc: {story_summary['current_arc']}")
+        print(f"Total Interactions: {story_summary['total_interactions']}")
         
         # Test event handler registration
         def security_event_handler(event: SecurityEvent):

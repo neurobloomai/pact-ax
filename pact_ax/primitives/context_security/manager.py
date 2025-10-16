@@ -143,9 +143,10 @@ class ContextSecurityManager:
     Provides trust-aware security that adapts to collaboration patterns while maintaining protection.
     """
     
-    def __init__(self, agent_identity: AgentIdentity, security_policy: SecurityPolicy = SecurityPolicy.TRUST_BASED):
+    def __init__(self, agent_identity: AgentIdentity, security_policy: SecurityPolicy = SecurityPolicy.TRUST_BASED),story_keeper: Optional[StoryKeeper] = None):
         self.agent_identity = agent_identity
         self.security_policy = security_policy
+        self.story_keeper = story_keeper
         
         # Core components
         self.encryption_engine = TrustAwareEncryption()
@@ -551,6 +552,22 @@ class ContextSecurityManager:
                              outcome: Optional[str] = None,
                              impact_score: float = 0.0):
         """Record security event for audit and learning"""
+
+     # At the end of _record_security_event method:
+
+     # Track security events as story if available
+     if self.story_keeper and event.impact_score > 0.3:  # Only significant events
+        self.story_keeper.process_interaction(
+        user_input=f"[SECURITY] {event.event_type.value}: {event.agent_from or 'system'} → {event.agent_to or 'system'}",
+        agent_response=f"Outcome: {event.outcome}, Threat: {event.threat_level.name}",
+        metadata={
+            "emotional_gravity": event.impact_score,
+            "is_security_event": True,
+            "threat_level": event.threat_level.value,
+            "event_type": event.event_type.value
+        }
+    )
+                                 
         
         event = SecurityEvent(
             event_type=event_type,

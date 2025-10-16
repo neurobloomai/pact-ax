@@ -739,7 +739,8 @@ if __name__ == "__main__":
         agent_id="security-test-agent",
         agent_type="test_agent",
         version="1.0.0",
-        capabilities=["natural_language", "decrypt_task_knowledge", "decrypt_emotional_state"]
+        capabilities=["natural_language", "decrypt_task_knowledge", "decrypt_emotional_state"],
+        specializations=[]
     )
     
     # Create story keeper for security narrative

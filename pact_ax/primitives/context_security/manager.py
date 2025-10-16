@@ -730,7 +730,17 @@ class ContextSecurityManager:
 
 # Example usage and testing
 if __name__ == "__main__":
-    from ..context_share.schemas import Priority
+    from ..story_keeper import StoryKeeper  # Add import
+    
+    # Create story keeper for security narrative
+    security_story = StoryKeeper("security-test-agent")
+    
+    # Pass it to security manager
+    security_manager = ContextSecurityManager(
+        agent, 
+        SecurityPolicy.TRUST_BASED,
+        story_keeper=security_story  # ← Add this
+    )
     
     # Create security manager for an agent
     agent = AgentIdentity(
@@ -740,7 +750,6 @@ if __name__ == "__main__":
         capabilities=["natural_language", "decrypt_task_knowledge", "decrypt_emotional_state"]
     )
     
-    security_manager = ContextSecurityManager(agent, SecurityPolicy.TRUST_BASED)
     
     # Create a test context packet
     test_packet = ContextPacket(

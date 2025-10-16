@@ -541,56 +541,55 @@ class ContextSecurityManager:
         return any(keyword in payload_str for keyword in suspicious_keywords)
     
     def _record_security_event(self, 
-                             event_type: SecurityEventType,
-                             agent_from: Optional[str] = None,
-                             agent_to: Optional[str] = None,
-                             context_type: Optional[ContextType] = None,
-                             trust_level: Optional[float] = None,
-                             encryption_level: Optional[EncryptionLevel] = None,
-                             threat_level: ThreatLevel = ThreatLevel.MINIMAL,
-                             details: Dict[str, Any] = None,
-                             outcome: Optional[str] = None,
-                             impact_score: float = 0.0):
-        """Record security event for audit and learning"""
-
-     # At the end of _record_security_event method:
-
-     # Track security events as story if available
-     if self.story_keeper and event.impact_score > 0.3:  # Only significant events
-        self.story_keeper.process_interaction(
-        user_input=f"[SECURITY] {event.event_type.value}: {event.agent_from or 'system'} → {event.agent_to or 'system'}",
-        agent_response=f"Outcome: {event.outcome}, Threat: {event.threat_level.name}",
-        metadata={
-            "emotional_gravity": event.impact_score,
-            "is_security_event": True,
-            "threat_level": event.threat_level.value,
-            "event_type": event.event_type.value
-        }
+                         event_type: SecurityEventType,
+                         agent_from: Optional[str] = None,
+                         agent_to: Optional[str] = None,
+                         context_type: Optional[ContextType] = None,
+                         trust_level: Optional[float] = None,
+                         encryption_level: Optional[EncryptionLevel] = None,
+                         threat_level: ThreatLevel = ThreatLevel.MINIMAL,
+                         details: Dict[str, Any] = None,
+                         outcome: Optional[str] = None,
+                         impact_score: float = 0.0):
+    """Record security event for audit and learning"""
+    
+    # FIRST: Create the event
+    event = SecurityEvent(
+        event_type=event_type,
+        agent_from=agent_from,
+        agent_to=agent_to,
+        context_type=context_type,
+        trust_level=trust_level,
+        encryption_level=encryption_level,
+        threat_level=threat_level,
+        details=details or {},
+        outcome=outcome,
+        impact_score=impact_score
     )
-                                 
-        
-        event = SecurityEvent(
-            event_type=event_type,
-            agent_from=agent_from,
-            agent_to=agent_to,
-            context_type=context_type,
-            trust_level=trust_level,
-            encryption_level=encryption_level,
-            threat_level=threat_level,
-            details=details or {},
-            outcome=outcome,
-            impact_score=impact_score
+    
+    # THEN: Append it to events
+    self.security_events.append(event)
+    
+    # THEN: Track as story if available (AFTER event is created!)
+    if self.story_keeper and event.impact_score > 0.3:  # Only significant events
+        self.story_keeper.process_interaction(
+            user_input=f"[SECURITY] {event.event_type.value}: {event.agent_from or 'system'} → {event.agent_to or 'system'}",
+            agent_response=f"Outcome: {event.outcome}, Threat: {event.threat_level.name}",
+            metadata={
+                "emotional_gravity": event.impact_score,
+                "is_security_event": True,
+                "threat_level": event.threat_level.value,
+                "event_type": event.event_type.value
+            }
         )
-        
-        self.security_events.append(event)
-        
-        # Trigger registered event handlers
-        for handler in self.event_handlers[event_type]:
-            try:
-                handler(event)
-            except Exception as e:
-                # Don't let handler failures break security operations
-                print(f"Event handler failed: {e}")
+    
+    # FINALLY: Trigger registered event handlers
+    for handler in self.event_handlers[event_type]:
+        try:
+            handler(event)
+        except Exception as e:
+            # Don't let handler failures break security operations
+            print(f"Event handler failed: {e}")
     
     def _learn_from_security_decision(self, 
                                     packet: ContextPacket, 

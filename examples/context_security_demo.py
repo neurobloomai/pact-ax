@@ -54,7 +54,7 @@ def main():
             "priority": "high"
         },
         metadata=ContextMetadata(),
-        trust_required=TrustLevel.INITIAL,
+        trust_required=TrustLevel.MINIMUM,
         priority=Priority.HIGH
     )
     
@@ -138,7 +138,7 @@ def main():
             "task": "account_recovery"
         },
         metadata=ContextMetadata(),
-        trust_required=TrustLevel.INITIAL,
+        trust_required=TrustLevel.MINIMUM,
         priority=Priority.NORMAL
     )
     

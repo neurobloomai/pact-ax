@@ -54,7 +54,7 @@ def main():
             "priority": "high"
         },
         metadata=ContextMetadata(),
-        trust_required=TrustLevel.MINIMAL,
+        #trust_required=TrustLevel.MINIMAL,
         priority=Priority.HIGH
     )
     

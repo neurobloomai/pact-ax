@@ -26,7 +26,8 @@ def main():
         agent_id="secure-agent-001",
         agent_type="secure_agent",
         version="1.0.0",
-        capabilities=["natural_language", "decrypt_task_knowledge"]
+        capabilities=["natural_language", "decrypt_task_knowledge"],
+        specializations=[]
     )
     
     story_keeper = StoryKeeper("secure-agent-001")

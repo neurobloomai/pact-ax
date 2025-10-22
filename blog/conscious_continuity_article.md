@@ -1,8 +1,12 @@
 # Why AI Agents Need Conscious Continuity
 
+*What if AI agents could remember not just what you said, but who you're becoming?*
+
 ## The Problem: Agents That Respond But Don't Relate
 
-You're having a conversation with an AI agent. You ask it to help you plan a project. It gives you a brilliant answer. Ten minutes later, you ask a follow-up question. The agent responds... but something feels off. It's coherent, but it doesn't quite *connect* to what you discussed before.
+You're having a conversation with an AI agent. You ask it to help you plan a project. It gives you a brilliant answer. Ten minutes later, you ask a follow-up question. The agent responds perfectly... but something feels off. It's coherent, but it doesn't quite *connect* to what you discussed before.
+
+The conversation is technically continuous, but experientially fragmented.
 
 This is the gap in modern AI agents: **they respond, but they don't relate**.
 
@@ -75,10 +79,14 @@ The magic happens in three pieces:
 ### 1. Story State
 ```python
 story_state = {
-    "characters": "User is [evolving description], Agent is [role]",
-    "arc": "We are at [current phase] of [journey type]",
-    "themes": "[What matters to this user]",
-    "last_beat": "Most recent significant moment"
+    "characters": {
+        "user": "Entrepreneur at ideation stage, values clarity over complexity",
+        "agent": "Strategic advisor focused on practical next steps"
+    },
+    "arc": "Beginning: Exploring startup concept → Current: Validating core assumptions",
+    "themes": ["clarity", "practical action", "managing uncertainty"],
+    "last_beat": "User expressed concern about market timing",
+    "context": "Week 2 of entrepreneurial planning journey"
 }
 ```
 
@@ -117,10 +125,12 @@ This isn't just theory. I've built a working prototype called **Story Keeper**.
 
 It's simple: ~200 lines of Python. But it demonstrates the concept:
 - An agent that maintains narrative continuity
-- Conversations that build on themselves
+- Conversations that build on themselves naturally
 - Coherence through story, not just memory
 
-[Link to GitHub repo - coming in 3 days]
+**[View the code on GitHub →](https://github.com/neurobloomai/pact-ax)**
+
+---
 
 ## What's Next
 
@@ -138,16 +148,20 @@ It's agents that don't just respond—they relate.
 
 ## Try It Yourself
 
-Want to experiment with Story Keeper? The code will be live on GitHub by [date].
+Want to experiment with Story Keeper?
 
-Questions? Thoughts? Find me on:
-- LinkedIn: [your profile]
-- Twitter: [if you have one]
-- Blog: neurobloom.ai
+**Get Started:**
+- 📦 [GitHub Repository](https://github.com/neurobloomai/pact-ax)
+- 📖 [Full Documentation](https://github.com/neurobloomai/pact-ax/blob/main/docs/story_keeper_guide.md)
+- 💬 [Join the Discussion](https://github.com/neurobloomai/pact-ax/discussions)
+
+**Connect:**
+- Website: [neurobloom.ai](https://neurobloom.ai)
+- Email: founders@neurobloom.ai
 
 Let's build agents that remember not just what we said, but who we are becoming together.
 
 ---
 
-*Written by [Your Name] | [Date]*
-*Part of the Agent Evolution series*
+*Published: October 2025*  
+*Part of the Agent Evolution series at neurobloom.ai*

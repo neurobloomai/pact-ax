@@ -350,7 +350,7 @@ By maintaining narrative continuity, agents build trust through consistent, cohe
 
 ## Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
+We welcome contributions! See the main [PACT-AX repository](https://github.com/neurobloomai/pact-ax) for contribution guidelines.
 
 **Areas for Contribution:**
 - Story compression algorithms
@@ -363,9 +363,8 @@ We welcome contributions! See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelin
 ## Related Resources
 
 - [Blog Post: "Why AI Agents Need Conscious Continuity"](../blog/conscious-continuity.md)
-- [PACT-AX Documentation](https://github.com/neurobloomai/pact-ax)
-- [Context Sharing Guide](./context_sharing_guide.md)
-- [Trust Scoring Guide](./trust_scoring_guide.md)
+- [PACT-AX Main Repository](https://github.com/neurobloomai/pact-ax)
+- [PACT-AX Documentation](https://github.com/neurobloomai/pact-ax#readme)
 
 ---
 

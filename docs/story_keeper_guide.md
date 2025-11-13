@@ -210,6 +210,29 @@ Story Keeper works best when integrated with Context Sharing and Trust Scoring.
 
 ---
 
+## The Problem StoryKeeper Solves
+
+**Current AI interactions are episodic** — each conversation starts fresh, requiring you to re-establish context, rapport, and emotional baseline.
+
+This works for one-off queries. It breaks down for:
+- **Long-term relationships** (coaching, therapy, mentorship)
+- **Ongoing journeys** (customer support, onboarding)
+- **Multi-agent systems** (where context must transfer between agents)
+
+**StoryKeeper maintains emotional continuity** — not just facts, but the relational substrate that makes conversations coherent over time.
+
+---
+
+## What This Is NOT
+
+- **Not a note-taking system** (see Obsidian, Notion)
+- **Not a knowledge base** (see Roam, Logseq)
+- **Not a productivity tool** (see PARA, GTD)
+
+**StoryKeeper is relational infrastructure** — it preserves the emotional context and narrative coherence that makes AI interactions feel like continuous relationships rather than isolated transactions.
+
+---
+
 ## Example Use Cases
 
 ### 1. **Long-term Coaching/Advisory**

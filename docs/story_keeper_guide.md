@@ -246,6 +246,30 @@ agent2_keeper.load_story_state(story)
 ```
 
 ---
+## Use Cases
+
+### Personal AI Relationships
+- Long-term coaching/mentorship
+- Therapy continuity
+- Learning companion
+
+### Enterprise
+- Customer support memory
+- Sales relationship tracking
+- Employee onboarding
+
+### Creative Work
+- **Character consistency for writers**
+- World-building continuity
+- Interactive fiction
+- RPG game mastering
+
+### AI Agent Coordination
+- Multi-agent systems maintaining shared context
+- AI company "culture" preservation
+- Decentralized organizations with value alignment
+
+---
 
 ## Troubleshooting
 

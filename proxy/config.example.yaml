@@ -1,0 +1,72 @@
+# PACT-AX Proxy — Example Configuration
+#
+# Usage:
+#   cp config.example.yaml config.yaml
+#   # Edit config.yaml, then export vars or set them inline:
+#   export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxx
+#   python -m proxy.src.proxy
+#
+# All values here can be overridden with environment variables.
+# Environment variables take precedence over this file.
+# -------------------------------------------------------------------
+
+# ── Upstream MCP Server ─────────────────────────────────────────────
+upstream:
+  # Transport mode: "docker" (recommended) or "npx" (legacy, deprecated package)
+  # Env: PACT_UPSTREAM_MODE
+  mode: docker
+
+  # Docker image for GitHub MCP server (only used when mode=docker)
+  image: ghcr.io/github/github-mcp-server
+
+  # GitHub Personal Access Token — REQUIRED
+  # Required scopes: repo (private repos), public_repo (public), read:org (org data)
+  # Env: GITHUB_PERSONAL_ACCESS_TOKEN
+  # DO NOT commit your actual token. Use env var or a secrets manager.
+  github_pat: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+
+
+# ── StoryKeeper (AX expression layer) ───────────────────────────────
+story_keeper:
+  # Coherence score below this → drift alert emitted
+  # Env: PACT_DRIFT_THRESHOLD
+  drift_threshold: 0.3
+
+  # Trust level below this → manual block (if block_on_violation=true)
+  trust_violation_threshold: 0.2
+
+  # Number of recent events used to establish behavioral patterns
+  pattern_window: 10
+
+
+# ── RLP-0 (relational primitive layer) ──────────────────────────────
+rlp0:
+  # Rupture risk above this → RLP-0 gate closes, requests blocked
+  # rupture_risk = avg(1 - trust, 1 - intent, 1 - narrative, 1 - commitments)
+  # Env: PACT_RUPTURE_THRESHOLD
+  rupture_threshold: 0.6
+
+  # Lower = more sensitive (fires earlier)
+  # Higher = more permissive (only fires on severe drift)
+  # Recommended range: 0.4 (strict) → 0.7 (permissive)
+
+
+# ── Enforcement ─────────────────────────────────────────────────────
+enforcement:
+  # RLP-0 gate always blocks when closed (not configurable — by design).
+  # This flag controls whether StoryKeeper drift ALONE (without RLP-0 rupture)
+  # also blocks requests.
+  # Env: PACT_BLOCK_ON_VIOLATION
+  block_on_violation: false
+
+  # Suggested rollout:
+  #   Phase 1: block_on_violation=false  → log-only, observe drift patterns
+  #   Phase 2: block_on_violation=false  → RLP-0 gate active (auto-enforced)
+  #   Phase 3: block_on_violation=true   → full enforcement, both layers block
+
+
+# ── Logging ─────────────────────────────────────────────────────────
+logging:
+  # Proxy logs go to stderr so stdout stays clean for MCP messages.
+  # Upstream (Docker) logs are captured at DEBUG level.
+  level: INFO  # DEBUG | INFO | WARNING | ERROR

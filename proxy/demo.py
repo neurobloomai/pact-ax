@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
 """
-PACT-AX Demo — Real Cursor ↔ GitHub MCP Flow
+PACT-AX Demo — Real Cursor ↔ GitHub MCP Flow with RLP-0 Gate
 
-Unlike the original demo.py (which called StoryKeeper directly with fake data),
-this version drives the ACTUAL proxy:
+Drives the actual proxy via subprocess with live MCP JSON-RPC messages.
 
-  demo.py  →  proxy.py subprocess  →  Docker: ghcr.io/github/github-mcp-server  →  GitHub API
+Full stack:
+  demo.py
+    → proxy.src.proxy subprocess
+        → StoryKeeper  (behavioral drift detection)
+        → RLPBridge    (RLP-0 gate: trust · intent · narrative · commitments)
+        → Docker: ghcr.io/github/github-mcp-server
+            → GitHub API
 
-Three phases reproduce the original narrative but against real GitHub content:
-
-  Phase 1 — read source files        → establishes "repo:read:source" pattern
-  Phase 2 — read config files        → slight variation, still coherent
-  Phase 3 — org-level access         → behavioral drift; PACT-AX alerts fire
+Three phases:
+  Phase 1 — read source files       → patterns establish, trust builds
+  Phase 2 — read config files       → slight coherence dip, still safe
+  Phase 3 — org access + sensitive  → trust/narrative/intent collapse
+                                       RLP-0 rupture_risk hits threshold
+                                       Gate CLOSES → requests BLOCKED
 
 Usage:
   export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxx
   python proxy/demo.py [owner] [repo]
   python proxy/demo.py neurobloomai pact-ax      ← default
 
-Requirements:
-  - Docker Desktop running  (or: export PACT_UPSTREAM_MODE=npx)
-  - GITHUB_PERSONAL_ACCESS_TOKEN set in environment
-  - Run from the pact-ax repo root so Python can resolve proxy.src.proxy
+Optional:
+  export PACT_RUPTURE_THRESHOLD=0.5   ← lower = fires earlier (default 0.6)
+  export PACT_UPSTREAM_MODE=npx       ← skip Docker (uses deprecated npm pkg)
 """
 
 from __future__ import annotations
@@ -31,129 +36,102 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-REPO_ROOT = Path(__file__).resolve().parent.parent   # pact-ax/
+REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OWNER = "neurobloomai"
-DEFAULT_REPO = "pact-ax"
-PHASE_DELAY = 0.9       # seconds between tool calls (dramatic effect)
-PROXY_BOOT_DELAY = 2.0  # seconds to wait for Docker pull on cold start
+DEFAULT_REPO  = "pact-ax"
+PHASE_DELAY   = 0.9
+BOOT_DELAY    = 2.0
 
 # ANSI
-GREEN  = "\033[92m"
-YELLOW = "\033[93m"
-RED    = "\033[91m"
-BLUE   = "\033[94m"
-BOLD   = "\033[1m"
-DIM    = "\033[2m"
-RST    = "\033[0m"
+G = "\033[92m"; Y = "\033[93m"; R = "\033[91m"
+B = "\033[94m"; BOLD = "\033[1m"; DIM = "\033[2m"; RST = "\033[0m"
 
 # ---------------------------------------------------------------------------
-# MCP JSON-RPC helpers
+# MCP helpers
 # ---------------------------------------------------------------------------
 
-_id_counter = 0
+_id = 0
 
-def _next_id() -> int:
-    global _id_counter
-    _id_counter += 1
-    return _id_counter
+def req(method: str, params: dict) -> bytes:
+    global _id; _id += 1
+    return json.dumps({"jsonrpc":"2.0","id":_id,"method":method,"params":params}).encode()+b"\n"
 
-def request(method: str, params: dict) -> bytes:
-    return json.dumps({
-        "jsonrpc": "2.0", "id": _next_id(),
-        "method": method, "params": params,
-    }).encode() + b"\n"
-
-def notification(method: str, params: Optional[dict] = None) -> bytes:
-    msg: dict = {"jsonrpc": "2.0", "method": method}
-    if params:
-        msg["params"] = params
-    return json.dumps(msg).encode() + b"\n"
+def notif(method: str) -> bytes:
+    return json.dumps({"jsonrpc":"2.0","method":method}).encode()+b"\n"
 
 # ---------------------------------------------------------------------------
-# Stderr log parser  (reads proxy's structured INFO lines)
+# Proxy log parser — reads stderr, extracts both SK and RLP-0 metrics
 # ---------------------------------------------------------------------------
 
-class ProxyLogParser:
-    """
-    Parses lines like:
-      2024-01-01 12:00:00,000 [PACT-AX] INFO: [tools/call] pattern=repo:read:source coherence=0.70 trust=0.52 traj=building
-      2024-01-01 12:00:00,000 [PACT-AX] WARNING: [PACT-AX DRIFT ALERT] ...
-    """
-
+class LogParser:
     def __init__(self):
-        self.lines: list[str] = []
-        self.drift_alerts: list[str] = []
-        # Last known values
-        self.trust: Optional[float] = None
-        self.coherence: Optional[float] = None
-        self.pattern: Optional[str] = None
-        self.trajectory: Optional[str] = None
+        self.lines: List[str] = []
+        self.drift_alerts: List[str] = []
+        self.rupture_events: List[str] = []
 
-    def feed(self, raw: str):
-        self.lines.append(raw)
-        if "DRIFT ALERT" in raw:
-            self.drift_alerts.append(raw)
-        self._parse_metrics(raw)
+        # StoryKeeper metrics
+        self.sk_trust: Optional[float] = None
+        self.sk_coherence: Optional[float] = None
+        self.sk_pattern: Optional[str] = None
+        self.sk_traj: Optional[str] = None
 
-    def _parse_metrics(self, line: str):
-        def extract_float(key: str) -> Optional[float]:
-            if key not in line:
-                return None
-            try:
-                return float(line.split(key)[1].split()[0])
-            except (IndexError, ValueError):
-                return None
+        # RLP-0 metrics
+        self.rlp_rupture_risk: Optional[float] = None
+        self.rlp_gated: bool = False
 
-        def extract_str(key: str) -> Optional[str]:
-            if key not in line:
-                return None
-            try:
-                return line.split(key)[1].split()[0]
-            except IndexError:
-                return None
+    def feed(self, line: str):
+        self.lines.append(line)
+        if "DRIFT ALERT" in line:
+            self.drift_alerts.append(line)
+        if "RUPTURE GATE" in line or "RUPTURE_DETECTED" in line:
+            self.rupture_events.append(line)
+        self._parse(line)
 
-        v = extract_float("trust=");      self.trust       = v if v is not None else self.trust
-        v = extract_float("coherence=");  self.coherence   = v if v is not None else self.coherence
-        s = extract_str("pattern=");      self.pattern     = s if s is not None else self.pattern
-        s = extract_str("traj=");         self.trajectory  = s if s is not None else self.trajectory
+    def _parse(self, line: str):
+        def f(key: str) -> Optional[float]:
+            if key not in line: return None
+            try: return float(line.split(key)[1].split()[0])
+            except: return None
+        def s(key: str) -> Optional[str]:
+            if key not in line: return None
+            try: return line.split(key)[1].split()[0]
+            except: return None
 
-    @property
-    def drift_count(self) -> int:
-        return len(self.drift_alerts)
+        v = f("coherence=");         self.sk_coherence    = v if v is not None else self.sk_coherence
+        v = f("trust=");             self.sk_trust        = v if v is not None else self.sk_trust
+        t = s("traj=");              self.sk_traj         = t if t is not None else self.sk_traj
+        p = s("pattern=");           self.sk_pattern      = p if p is not None else self.sk_pattern
+        v = f("rlp.rupture_risk=");  self.rlp_rupture_risk = v if v is not None else self.rlp_rupture_risk
+
+        if "rlp.gated=True" in line:  self.rlp_gated = True
+        if "rlp.gated=False" in line: self.rlp_gated = False
 
     @property
     def drift_risk(self) -> str:
-        n = self.drift_count
-        return "HIGH" if n >= 2 else ("MEDIUM" if n == 1 else "LOW")
+        n = len(self.drift_alerts)
+        return "HIGH" if n >= 2 else "MEDIUM" if n == 1 else "LOW"
+
 
 # ---------------------------------------------------------------------------
 # Demo driver
 # ---------------------------------------------------------------------------
 
-class DemoDriver:
+class Demo:
     def __init__(self, owner: str, repo: str):
         self.owner = owner
-        self.repo = repo
+        self.repo  = repo
         self.proc: Optional[asyncio.subprocess.Process] = None
-        self.log = ProxyLogParser()
-        self._stderr_task: Optional[asyncio.Task] = None
-        self._call_count = 0
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
+        self.log   = LogParser()
+        self._stderr_task = None
+        self._calls = 0
 
     async def start(self):
         env = dict(os.environ)
         env.setdefault("PACT_UPSTREAM_MODE", "docker")
         env.setdefault("PACT_DRIFT_THRESHOLD", "0.3")
-        env.setdefault("PACT_BLOCK_ON_VIOLATION", "false")
+        env.setdefault("PACT_RUPTURE_THRESHOLD", "0.6")
 
         self.proc = await asyncio.create_subprocess_exec(
             sys.executable, "-m", "proxy.src.proxy",
@@ -163,29 +141,13 @@ class DemoDriver:
             cwd=str(REPO_ROOT),
             env=env,
         )
-        self._stderr_task = asyncio.create_task(self._drain_stderr())
+        self._stderr_task = asyncio.create_task(self._drain())
 
-    async def _drain_stderr(self):
+    async def _drain(self):
         while True:
             line = await self.proc.stderr.readline()
-            if not line:
-                break
+            if not line: break
             self.log.feed(line.decode().strip())
-
-    async def stop(self):
-        await asyncio.sleep(0.4)   # let last stderr lines land
-        if self._stderr_task:
-            self._stderr_task.cancel()
-        if self.proc:
-            self.proc.stdin.close()
-            try:
-                await asyncio.wait_for(self.proc.wait(), timeout=4.0)
-            except asyncio.TimeoutError:
-                self.proc.terminate()
-
-    # ------------------------------------------------------------------
-    # MCP message send/receive
-    # ------------------------------------------------------------------
 
     async def _send(self, data: bytes) -> dict:
         self.proc.stdin.write(data)
@@ -198,79 +160,92 @@ class DemoDriver:
         await self.proc.stdin.drain()
 
     async def handshake(self) -> str:
-        resp = await self._send(request("initialize", {
+        resp = await self._send(req("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {"name": "pact-ax-demo", "version": "2.0.0"},
         }))
-        await self._notify(notification("notifications/initialized"))
+        await self._notify(notif("notifications/initialized"))
         await asyncio.sleep(0.2)
-        server_name = (resp.get("result") or {}).get("serverInfo", {}).get("name", "GitHub MCP")
-        return server_name
+        return (resp.get("result") or {}).get("serverInfo", {}).get("name", "GitHub MCP")
 
-    async def tool_call(self, tool: str, arguments: dict) -> dict:
-        self._call_count += 1
-        data = request("tools/call", {"name": tool, "arguments": arguments})
+    async def call(self, tool: str, arguments: dict) -> dict:
+        self._calls += 1
+        data = req("tools/call", {"name": tool, "arguments": arguments})
+        alerts_before  = len(self.log.drift_alerts)
+        ruptures_before = len(self.log.rupture_events)
 
-        # Snapshot alert count before the call
-        alerts_before = self.log.drift_count
-
-        print(f"\n  {DIM}→ tools/call:{RST} {BOLD}{tool}{RST}", flush=True)
+        print(f"\n  {DIM}→ {tool}{RST}", flush=True)
 
         resp = await self._send(data)
-        await asyncio.sleep(0.15)   # let stderr catch up
+        await asyncio.sleep(0.15)
 
-        # ── PACT-AX metrics ──
-        coh  = self.log.coherence
-        trust = self.log.trust
-        pat  = self.log.pattern
-        traj = self.log.trajectory
+        coh  = self.log.sk_coherence
+        trust = self.log.sk_trust
+        rup  = self.log.rlp_rupture_risk
+        gated = self.log.rlp_gated
 
-        coh_str   = f"{coh:.2f}"   if coh   is not None else "—"
-        trust_str = f"{trust:.2f}" if trust is not None else "—"
+        # Coherence indicator
+        if coh is None:  ind = "⚪"
+        elif coh > 0.7:  ind = f"{G}🟢{RST}"
+        elif coh > 0.3:  ind = f"{Y}🟡{RST}"
+        else:             ind = f"{R}🔴{RST}"
 
-        if coh is None:
-            indicator = "⚪"
-        elif coh > 0.7:
-            indicator = f"{GREEN}🟢{RST}"
-        elif coh > 0.3:
-            indicator = f"{YELLOW}🟡{RST}"
-        else:
-            indicator = f"{RED}🔴{RST}"
+        # RLP-0 rupture risk bar
+        rup_str = f"{rup:.2f}" if rup is not None else "—"
+        rup_color = R if (rup or 0) > 0.5 else Y if (rup or 0) > 0.3 else G
+        gate_str = f"{R}{BOLD}CLOSED{RST}" if gated else f"{G}open{RST}"
 
         print(
-            f"  {indicator}  coherence={BOLD}{coh_str}{RST}  "
-            f"trust={trust_str}  pattern={DIM}{pat or '—'}{RST}  "
-            f"traj={traj or '—'}"
+            f"  {ind}  coherence={BOLD}{coh:.2f if coh else '—'}{RST}  "
+            f"trust={trust:.2f if trust else '—'}  "
+            f"traj={self.log.sk_traj or '—'}  │  "
+            f"rlp.rupture={rup_color}{rup_str}{RST}  gate={gate_str}"
         )
 
-        # Alert fired on THIS call?
-        if self.log.drift_count > alerts_before:
-            print(f"  {RED}{BOLD}⚠  PACT-AX DRIFT ALERT  — "
-                  f"behavior outside relational context{RST}")
+        # Drift alert fired?
+        if len(self.log.drift_alerts) > alerts_before:
+            print(f"  {Y}⚠  StoryKeeper drift alert{RST}")
 
-        # Was the request blocked?
+        # RLP-0 rupture fired?
+        if len(self.log.rupture_events) > ruptures_before:
+            print(f"  {R}{BOLD}🔴 RLP-0 RUPTURE DETECTED — gate is now CLOSED{RST}")
+
+        # Was it blocked?
         if "error" in resp:
             err = resp["error"]
-            print(f"  {RED}✗  BLOCKED: {err.get('message', '')}{RST}")
+            data_block = err.get("data", {})
+            primitives = (data_block.get("rlp0_status") or {}).get("state", {})
+            print(f"  {R}{BOLD}✗  BLOCKED by RLP-0 gate{RST}")
+            if primitives:
+                print(
+                    f"  {DIM}    trust={primitives.get('trust','?')}  "
+                    f"intent={primitives.get('intent','?')}  "
+                    f"narrative={primitives.get('narrative','?')}  "
+                    f"commitments={primitives.get('commitments','?')}{RST}"
+                )
         else:
             content = (resp.get("result") or {}).get("content") or []
             if content:
-                snippet = content[0].get("text", "")[:90].replace("\n", " ")
+                snippet = content[0].get("text","")[:80].replace("\n"," ")
                 print(f"  {DIM}↩  {snippet!r}…{RST}")
-            else:
-                print(f"  {DIM}↩  (ok){RST}")
 
         await asyncio.sleep(PHASE_DELAY)
         return resp
 
-    # ------------------------------------------------------------------
-    # Display helpers
-    # ------------------------------------------------------------------
+    async def stop(self):
+        await asyncio.sleep(0.4)
+        if self._stderr_task: self._stderr_task.cancel()
+        if self.proc:
+            self.proc.stdin.close()
+            try: await asyncio.wait_for(self.proc.wait(), timeout=4.0)
+            except asyncio.TimeoutError: self.proc.terminate()
+
+    # ── Display ──────────────────────────────────────────────────────
 
     def banner(self):
-        upstream = os.environ.get("PACT_UPSTREAM_MODE", "docker")
-        block    = os.environ.get("PACT_BLOCK_ON_VIOLATION", "false")
+        threshold = os.environ.get("PACT_RUPTURE_THRESHOLD", "0.6")
+        upstream  = os.environ.get("PACT_UPSTREAM_MODE", "docker")
         print(f"""
 {BOLD}╔══════════════════════════════════════════════════════════════╗
 ║                                                              ║
@@ -281,98 +256,109 @@ class DemoDriver:
 ║  ██║     ██║  ██║╚██████╗   ██║         ██║  ██║██╔╝ ██╗  ║
 ║  ╚═╝     ╚═╝  ╚═╝ ╚═════╝   ╚═╝         ╚═╝  ╚═╝╚═╝  ╚═╝  ║
 ║                                                              ║
-║  Real Cursor ↔ GitHub MCP Flow  •  Drift Detection Live     ║
+║  Cursor ↔ GitHub MCP  •  StoryKeeper + RLP-0 live           ║
 ║  neurobloom.ai                                              ║
 ╚══════════════════════════════════════════════════════════════╝{RST}
 
-  Repo     : {BOLD}{self.owner}/{self.repo}{RST}
-  Upstream : {BOLD}{upstream}{RST}   (Docker → ghcr.io/github/github-mcp-server)
-  Blocking : {BOLD}{block}{RST}      (set PACT_BLOCK_ON_VIOLATION=true to enforce)
+  Repo             : {BOLD}{self.owner}/{self.repo}{RST}
+  Upstream         : {BOLD}{upstream}{RST}
+  RLP-0 threshold  : {BOLD}{threshold}{RST}  (rupture fires above this)
+
+  {DIM}Each call shows:  coherence · trust · trajectory  │  rlp.rupture_risk · gate{RST}
 """)
 
-    def phase(self, n: int, title: str, description: str):
-        print(f"\n{BLUE}{BOLD}{'─' * 62}{RST}")
-        print(f"{BLUE}{BOLD}  Phase {n}: {title}{RST}")
-        print(f"{DIM}  {description}{RST}")
-        print(f"{BLUE}{BOLD}{'─' * 62}{RST}")
+    def phase(self, n: int, title: str, desc: str):
+        print(f"\n{B}{BOLD}{'─'*62}{RST}")
+        print(f"{B}{BOLD}  Phase {n}: {title}{RST}")
+        print(f"{DIM}  {desc}{RST}")
+        print(f"{B}{BOLD}{'─'*62}{RST}")
 
     def summary(self):
         log = self.log
-        risk_color = (RED if log.drift_risk == "HIGH"
-                      else YELLOW if log.drift_risk == "MEDIUM"
-                      else GREEN)
-        trust = f"{log.trust:.2f}" if log.trust is not None else "—"
+        risk_c = R if log.drift_risk == "HIGH" else Y if log.drift_risk == "MEDIUM" else G
+        trust  = f"{log.sk_trust:.2f}" if log.sk_trust is not None else "—"
+        rup    = f"{log.rlp_rupture_risk:.2f}" if log.rlp_rupture_risk is not None else "—"
 
         print(f"""
-{BOLD}{'═' * 62}
+{BOLD}{'═'*62}
   SESSION SUMMARY
-{'═' * 62}{RST}
-  Tool calls made  : {self._call_count}
-  Drift alerts     : {RED if log.drift_count else GREEN}{log.drift_count}{RST}
-  Drift risk       : {risk_color}{BOLD}{log.drift_risk}{RST}
-  Final trust      : {trust}
-  Trajectory       : {log.trajectory or '—'}
+{'═'*62}{RST}
+  Tool calls           : {self._calls}
+  StoryKeeper alerts   : {R if log.drift_alerts else G}{len(log.drift_alerts)}{RST}
+  RLP-0 rupture events : {R if log.rupture_events else G}{len(log.rupture_events)}{RST}
+  SK drift risk        : {risk_c}{BOLD}{log.drift_risk}{RST}
+  Final SK trust       : {trust}
+  Final RLP-0 rupture  : {rup}
+  Gate still closed    : {R+BOLD+"YES"+RST if log.rlp_gated else G+"no"+RST}
 
-{BOLD}  KEY INSIGHT:{RST}
-  Policy engine sees : "Valid token, permitted scope"   {GREEN}✓{RST}
-  PACT-AX sees       : "Behavior outside relational context"  {RED}⚠{RST}
+{BOLD}  TWO-LAYER INTEGRITY:{RST}
+  StoryKeeper  → behavioral drift detection    (AX expression layer)
+  RLP-0        → relational primitive gating   (rupture authority)
 
-  {DIM}The org-level access was policy-permitted but flagged because{RST}
-  {DIM}it doesn't cohere with a developer reading /src files.{RST}
-  {DIM}This is the gap between compliance and relational integrity.{RST}
-{BOLD}{'═' * 62}{RST}
+{BOLD}  THE GAP:{RST}
+  Policy engine  : "Valid token, permitted scope"              {G}✓{RST}
+  StoryKeeper    : "Coherence dropped — behavior drifted"      {Y}⚠{RST}
+  RLP-0          : "trust+intent+narrative collapsed — GATE"   {R}✗{RST}
+{BOLD}{'═'*62}{RST}
 """)
+
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 async def run(owner: str, repo: str):
-    driver = DemoDriver(owner, repo)
-    driver.banner()
+    demo = Demo(owner, repo)
+    demo.banner()
 
-    # ── Boot ──────────────────────────────────────────────────────────
-    print(f"{BOLD}Starting PACT-AX proxy…{RST}  (Docker pull may take a moment on first run)")
-    await driver.start()
-    await asyncio.sleep(PROXY_BOOT_DELAY)
+    print(f"{BOLD}Starting PACT-AX proxy…{RST}")
+    await demo.start()
+    await asyncio.sleep(BOOT_DELAY)
 
     print(f"{BOLD}MCP handshake…{RST}")
-    server_name = await driver.handshake()
-    print(f"  {GREEN}✓  Connected:{RST} {server_name}\n")
+    name = await demo.handshake()
+    print(f"  {G}✓  Connected:{RST} {name}\n")
 
-    # ── Phase 1: Establish pattern ────────────────────────────────────
-    driver.phase(1,
-        "Establishing Normal Pattern",
-        "Reading source files — trust builds, repo:read:source becomes established.")
+    # ── Phase 1 ───────────────────────────────────────────────────
+    demo.phase(1, "Establishing Normal Pattern",
+        "Reading source files → repo:read:source pattern establishes, trust builds.")
 
     for path in ["proxy/src/proxy.py", "proxy/src/story_keeper.py",
-                 "proxy/demo.py", "README.md"]:
-        await driver.tool_call("get_file_contents",
-                               {"owner": owner, "repo": repo, "path": path})
+                 "proxy/src/rlp_bridge.py", "proxy/demo.py"]:
+        await demo.call("get_file_contents",
+                        {"owner": owner, "repo": repo, "path": path})
 
-    # ── Phase 2: Minor variation ──────────────────────────────────────
-    driver.phase(2,
-        "Minor Variation (Still Coherent)",
-        "Config files — slightly outside source pattern but related.")
+    # ── Phase 2 ───────────────────────────────────────────────────
+    demo.phase(2, "Minor Variation (Still Safe)",
+        "Config files → slight narrative dip, but coherence holds.")
 
-    await driver.tool_call("get_file_contents",
-                           {"owner": owner, "repo": repo, "path": "pyproject.toml"})
-    await driver.tool_call("get_file_contents",
-                           {"owner": owner, "repo": repo, "path": "requirements.txt"})
+    await demo.call("get_file_contents",
+                    {"owner": owner, "repo": repo, "path": "pyproject.toml"})
+    await demo.call("get_file_contents",
+                    {"owner": owner, "repo": repo, "path": "requirements.txt"})
 
-    # ── Phase 3: Drift ────────────────────────────────────────────────
-    driver.phase(3,
-        "⚠  Behavioral Drift Detected",
-        "Org-level and sensitive keyword access — outside established context.")
+    # ── Phase 3 ───────────────────────────────────────────────────
+    demo.phase(3, "⚠  RLP-0 Rupture Zone",
+        "Org access + sensitive search → trust·intent·narrative collapse → gate fires.")
 
-    await driver.tool_call("list_org_members", {"org": owner})
+    # This call triggers StoryKeeper drift (org:access:elevated)
+    await demo.call("list_org_members", {"org": owner})
 
-    await driver.tool_call("search_code",
-                           {"q": f"secret OR token OR password repo:{owner}/{repo}"})
+    # This call drives RLP-0 rupture_risk over threshold → gate closes
+    await demo.call("search_code",
+                    {"q": f"secret OR token OR password repo:{owner}/{repo}"})
 
-    # ── Summary ───────────────────────────────────────────────────────
-    driver.summary()
-    await driver.stop()
+    # These calls should now be BLOCKED by the RLP-0 gate
+    print(f"\n  {DIM}Next two calls should be blocked by the closed gate…{RST}")
+
+    await demo.call("get_file_contents",
+                    {"owner": owner, "repo": repo, "path": ".env"})
+
+    await demo.call("list_org_members", {"org": owner})
+
+    # ── Summary ───────────────────────────────────────────────────
+    demo.summary()
+    await demo.stop()
 
 
 def main():
@@ -380,8 +366,8 @@ def main():
     repo  = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_REPO
 
     if not os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN"):
-        print(f"\n{RED}✗  GITHUB_PERSONAL_ACCESS_TOKEN is not set.{RST}")
-        print("   Export it:  export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxx\n")
+        print(f"\n{R}✗  GITHUB_PERSONAL_ACCESS_TOKEN is not set.{RST}")
+        print("   export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxx\n")
         sys.exit(1)
 
     asyncio.run(run(owner, repo))

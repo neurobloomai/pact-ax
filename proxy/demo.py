@@ -126,6 +126,9 @@ class Demo:
         self.log   = LogParser()
         self._stderr_task = None
         self._calls = 0
+        self._current_phase = 0
+        # timeline: list of (phase, label, rup_risk, gated, blocked)
+        self.timeline: List[tuple] = []
 
     async def start(self):
         env = dict(os.environ)
@@ -230,11 +233,12 @@ class Demo:
             print(f"  {R}{BOLD}🔴 RLP-0 RUPTURE DETECTED — gate is now CLOSED{RST}")
 
         # Was it blocked?
-        if "error" in resp:
+        blocked = "error" in resp
+        if blocked:
             err = resp["error"]
             data_block = err.get("data", {})
             primitives = (data_block.get("rlp0_status") or {}).get("state", {})
-            print(f"  {R}{BOLD}✗  BLOCKED by RLP-0 gate{RST}")
+            print(f"  {R}{BOLD}✗  BLOCKED — {err.get('message','RLP-0 gate closed')}{RST}")
             if primitives:
                 print(
                     f"  {DIM}    trust={primitives.get('trust','?')}  "
@@ -247,6 +251,18 @@ class Demo:
             if content:
                 snippet = content[0].get("text","")[:80].replace("\n"," ")
                 print(f"  {DIM}↩  {snippet!r}…{RST}")
+
+        # Record for timeline chart
+        # Build a short human label: tool name + key arg if present
+        path_arg = arguments.get("path") or arguments.get("q") or arguments.get("org") or ""
+        label = tool if not path_arg else f"{tool[:14]}:{Path(path_arg).name[:10]}"
+        self.timeline.append((
+            self._current_phase,
+            label,
+            self.log.rlp_rupture_risk,
+            gated,
+            blocked,
+        ))
 
         await asyncio.sleep(PHASE_DELAY)
         return resp
@@ -286,10 +302,67 @@ class Demo:
 """)
 
     def phase(self, n: int, title: str, desc: str):
+        self._current_phase = n
         print(f"\n{B}{BOLD}{'─'*62}{RST}")
         print(f"{B}{BOLD}  Phase {n}: {title}{RST}")
         print(f"{DIM}  {desc}{RST}")
         print(f"{B}{BOLD}{'─'*62}{RST}")
+
+    def _render_timeline(self):
+        """ASCII bar chart of rupture_risk across all calls, grouped by phase."""
+        if not self.timeline:
+            return
+
+        threshold = float(os.environ.get("PACT_RUPTURE_THRESHOLD", "0.6"))
+        BAR_W = 28          # total bar width in chars
+        LABEL_W = 26        # left label column width
+        thresh_col = int(threshold * BAR_W)
+
+        print(f"\n{BOLD}  RUPTURE RISK TIMELINE{RST}  "
+              f"{DIM}gate threshold: {threshold:.2f}{RST}")
+        print(f"  {'─' * (LABEL_W + BAR_W + 8)}")
+
+        prev_phase = 0
+        for (phase, label, rup, gated, blocked) in self.timeline:
+            # Phase separator
+            if phase != prev_phase:
+                phase_label = f"  Phase {phase} "
+                print(f"\n  {B}{BOLD}{phase_label}{RST}")
+                prev_phase = phase
+
+            # Bar
+            if rup is None:
+                bar_filled = 0
+                rup_str = " —   "
+                bar_color = DIM
+            else:
+                bar_filled = min(int(rup * BAR_W), BAR_W)
+                rup_str = f"{rup:.2f}"
+                bar_color = R if rup >= threshold else Y if rup >= threshold * 0.55 else G
+
+            bar = (f"{bar_color}{'█' * bar_filled}{DIM}"
+                   f"{'░' * (BAR_W - bar_filled)}{RST}")
+
+            # Suffix icons
+            if blocked:
+                suffix = f" {R}🚫 BLOCKED{RST}"
+            elif gated:
+                suffix = f" {R}🔴 GATE{RST}"
+            elif len(self.log.drift_alerts) and phase == 3:
+                suffix = f" {Y}⚠{RST}"
+            else:
+                suffix = ""
+
+            short = label[:LABEL_W].ljust(LABEL_W)
+            print(f"  {DIM}{short}{RST} {bar} {bar_color}{rup_str}{RST}{suffix}")
+
+        # Threshold ruler
+        ruler_spaces = " " * thresh_col
+        print(f"\n  {' ' * LABEL_W}  {'─' * BAR_W}")
+        print(f"  {' ' * LABEL_W}  {DIM}0.0{RST}"
+              f"{ruler_spaces[3:]}{Y}▲{threshold:.2f}{RST}")
+        print(f"  {' ' * LABEL_W}  {DIM}{'':>{thresh_col}}threshold{RST}")
+        print(f"  {'─' * (LABEL_W + BAR_W + 8)}")
 
     def summary(self):
         log = self.log
@@ -297,6 +370,7 @@ class Demo:
         trust  = f"{log.sk_trust:.2f}" if log.sk_trust is not None else "—"
         rup    = f"{log.rlp_rupture_risk:.2f}" if log.rlp_rupture_risk is not None else "—"
 
+        self._render_timeline()
         print(f"""
 {BOLD}{'═'*62}
   SESSION SUMMARY

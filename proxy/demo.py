@@ -42,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OWNER = "neurobloomai"
 DEFAULT_REPO  = "pact-ax"
 PHASE_DELAY   = 0.9
-BOOT_DELAY    = 2.0
+BOOT_DELAY    = 5.0   # allow time for Docker pull on first run
 
 # ANSI
 G = "\033[92m"; Y = "\033[93m"; R = "\033[91m"
@@ -142,6 +142,22 @@ class Demo:
             env=env,
         )
         self._stderr_task = asyncio.create_task(self._drain())
+
+    async def health_check(self):
+        """Check proxy is still alive after boot delay. Print stderr if crashed."""
+        await asyncio.sleep(0.5)
+        if self.proc.returncode is not None:
+            # Process already exited — collect stderr and show it
+            stderr_lines = self.log.lines
+            print(f"\n{R}{BOLD}✗  Proxy crashed on startup (exit code {self.proc.returncode}){RST}")
+            if stderr_lines:
+                print(f"{R}--- proxy stderr ---{RST}")
+                for line in stderr_lines[-20:]:
+                    print(f"  {line}")
+                print(f"{R}--------------------{RST}")
+            else:
+                print(f"{DIM}  (no stderr captured — check Docker is running){RST}")
+            sys.exit(1)
 
     async def _drain(self):
         while True:
@@ -314,6 +330,7 @@ async def run(owner: str, repo: str):
     print(f"{BOLD}Starting PACT-AX proxy…{RST}")
     await demo.start()
     await asyncio.sleep(BOOT_DELAY)
+    await demo.health_check()
 
     print(f"{BOLD}MCP handshake…{RST}")
     name = await demo.handshake()

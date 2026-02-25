@@ -6,7 +6,7 @@ Drives the actual proxy via subprocess with live MCP JSON-RPC messages.
 
 Full stack:
   demo.py
-    → proxy.src.proxy subprocess
+    → proxy.src subprocess
         → StoryKeeper  (behavioral drift detection)
         → RLPBridge    (RLP-0 gate: trust · intent · narrative · commitments)
         → Docker: ghcr.io/github/github-mcp-server

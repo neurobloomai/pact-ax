@@ -1,34 +1,48 @@
 """
-PACT-AX Proxy - Session Integrity Layer for MCP
+PACT-AX Proxy — Session Integrity Layer for MCP
 
-Sits between MCP client (Cursor) and MCP server (GitHub),
-maintaining relational state and detecting behavioral drift.
+Sits between Cursor (MCP client) and GitHub (MCP server),
+maintaining relational state through two layers:
 
-CHANGES from original:
-- Upstream updated from deprecated @modelcontextprotocol/server-github
-  to ghcr.io/github/github-mcp-server (Docker) or remote HTTP mode.
-- GITHUB_PERSONAL_ACCESS_TOKEN properly plumbed to upstream subprocess.
-- asyncio.get_event_loop() replaced with asyncio.get_running_loop().
-- Added UPSTREAM_MODE env var so you can switch transports without
-  editing the source (stdio=Docker, http=remote API).
+    StoryKeeper  — behavioral coherence, pattern drift detection (AX expression layer)
+    RLP-0        — relational primitive gating (rupture detection, gate authority)
+
+Architecture:
+    Cursor stdin/stdout
+          ↕  MCP JSON-RPC (newline-delimited)
+    PACTAXProxy
+          ├── StoryKeeper.record_event()   → coherence score, drift alert
+          └── RLPBridge.sync()             → rupture_risk, gate open/closed
+          ↕  subprocess stdin/stdout
+    Docker: ghcr.io/github/github-mcp-server
+          ↕
+    GitHub API
+
+Environment variables:
+    GITHUB_PERSONAL_ACCESS_TOKEN   required — passed to upstream Docker container
+    PACT_UPSTREAM_MODE             docker (default) | npx
+    PACT_DRIFT_THRESHOLD           float, default 0.3  (StoryKeeper coherence floor)
+    PACT_RUPTURE_THRESHOLD         float, default 0.6  (RLP-0 rupture gate trigger)
+    PACT_BLOCK_ON_VIOLATION        true | false (default false) — legacy manual block
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
 import os
 import uuid
 import sys
-from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional
 import logging
 
 from .story_keeper import StoryKeeper, TrustTrajectory
+from .rlp_bridge import RLPBridge
 
-# Configure logging to stderr so stdout stays clean for MCP messages
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [PACT-AX] %(levelname)s: %(message)s',
+    format="%(asctime)s [PACT-AX] %(levelname)s: %(message)s",
     stream=sys.stderr,
 )
 logger = logging.getLogger("pact-ax")
@@ -40,43 +54,32 @@ logger = logging.getLogger("pact-ax")
 
 @dataclass
 class ProxyConfig:
-    """Configuration for PACT-AX proxy.
-
-    Environment variables override defaults:
-      PACT_UPSTREAM_MODE   : "docker" (default) | "npx"
-      GITHUB_PERSONAL_ACCESS_TOKEN : required for upstream auth
-      PACT_DRIFT_THRESHOLD  : float, default 0.3
-      PACT_BLOCK_ON_VIOLATION : "true" | "false" (default false)
-    """
-
-    # Upstream MCP server transport
     upstream_mode: str = field(
         default_factory=lambda: os.environ.get("PACT_UPSTREAM_MODE", "docker")
     )
-
-    # Behavior thresholds
     drift_threshold: float = field(
         default_factory=lambda: float(os.environ.get("PACT_DRIFT_THRESHOLD", "0.3"))
     )
+    rupture_threshold: float = field(
+        default_factory=lambda: float(os.environ.get("PACT_RUPTURE_THRESHOLD", "0.6"))
+    )
     trust_violation_threshold: float = 0.2
-    alert_on_drift: bool = True
     block_on_violation: bool = field(
-        default_factory=lambda: os.environ.get("PACT_BLOCK_ON_VIOLATION", "false").lower() == "true"
+        default_factory=lambda: os.environ.get(
+            "PACT_BLOCK_ON_VIOLATION", "false"
+        ).lower() == "true"
     )
 
     @property
     def upstream_command(self) -> str:
-        if self.upstream_mode == "npx":
-            return "npx"
-        return "docker"
+        return "npx" if self.upstream_mode == "npx" else "docker"
 
     @property
-    def upstream_args(self) -> list[str]:
+    def upstream_args(self) -> list:
         if self.upstream_mode == "npx":
-            # NOTE: @modelcontextprotocol/server-github is deprecated (April 2025).
-            # Use docker mode instead.  This branch kept for local dev without Docker.
+            # NOTE: @modelcontextprotocol/server-github deprecated April 2025.
+            # Prefer docker mode.
             return ["-y", "@modelcontextprotocol/server-github"]
-        # Docker mode — recommended
         return [
             "run", "-i", "--rm",
             "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
@@ -85,13 +88,12 @@ class ProxyConfig:
 
     @property
     def upstream_env(self) -> dict:
-        """Environment passed to the upstream subprocess."""
-        env = dict(os.environ)  # inherit full env so Docker can find token
+        env = dict(os.environ)
         pat = os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")
         if not pat:
             logger.warning(
-                "GITHUB_PERSONAL_ACCESS_TOKEN is not set. "
-                "Upstream GitHub MCP server will likely reject requests."
+                "GITHUB_PERSONAL_ACCESS_TOKEN is not set — "
+                "upstream will likely reject requests."
             )
         env["GITHUB_PERSONAL_ACCESS_TOKEN"] = pat
         return env
@@ -102,8 +104,6 @@ class ProxyConfig:
 # ---------------------------------------------------------------------------
 
 class MCPMessage:
-    """Parsed MCP JSON-RPC message."""
-
     def __init__(self, raw: bytes):
         self.raw = raw
         self.data = json.loads(raw.decode("utf-8"))
@@ -137,17 +137,21 @@ class MCPMessage:
 
 
 # ---------------------------------------------------------------------------
-# Proxy core
+# Proxy
 # ---------------------------------------------------------------------------
 
 class PACTAXProxy:
     """
-    Bidirectional stdio proxy.
+    Bidirectional stdio MCP proxy with two-layer session integrity.
 
-    Cursor (stdin/stdout) ↔ PACT-AX ↔ GitHub MCP (subprocess stdin/stdout)
+    Layer 1 — StoryKeeper (AX expression layer):
+        Tracks resource access patterns, coherence scores, trust trajectory.
+        Emits drift alerts when coherence drops below drift_threshold.
 
-    Each outgoing request is evaluated by StoryKeeper before forwarding.
-    Responses are passed through unchanged (future: add PACT-AX annotations).
+    Layer 2 — RLP-0 (relational primitive layer):
+        Receives four primitives translated from StoryKeeper state.
+        Computes rupture_risk; gates interaction when threshold exceeded.
+        Gate authority is final — overrides manual block_on_violation.
     """
 
     def __init__(self, config: ProxyConfig):
@@ -155,12 +159,13 @@ class PACTAXProxy:
         self.story_keeper = StoryKeeper()
         self.story_keeper.drift_threshold = config.drift_threshold
 
+        self.rlp_bridge: Optional[RLPBridge] = None
         self.session_id: Optional[str] = None
         self.upstream_process: Optional[asyncio.subprocess.Process] = None
 
-        # Counters
         self.messages_processed = 0
         self.drift_alerts = 0
+        self.rupture_events = 0
         self.blocked_requests = 0
 
     # ------------------------------------------------------------------
@@ -169,7 +174,10 @@ class PACTAXProxy:
 
     async def start(self):
         logger.info(
-            f"Starting PACT-AX Proxy  mode={self.config.upstream_mode}  "
+            f"PACT-AX Proxy starting  "
+            f"upstream={self.config.upstream_mode}  "
+            f"drift_threshold={self.config.drift_threshold}  "
+            f"rupture_threshold={self.config.rupture_threshold}  "
             f"block_on_violation={self.config.block_on_violation}"
         )
 
@@ -179,19 +187,22 @@ class PACTAXProxy:
             client_identity="cursor:local",
             server_target="github:mcp",
         )
-        logger.info(f"Session created: {self.session_id}")
+        self.rlp_bridge = RLPBridge(
+            rupture_threshold=self.config.rupture_threshold
+        )
+        logger.info(f"Session: {self.session_id}")
 
         await self._start_upstream()
-        await self._run_stdio_proxy()
+        await self._run_proxy()
 
     async def _start_upstream(self):
-        cmd = self.config.upstream_command
-        args = self.config.upstream_args
-        logger.info(f"Launching upstream: {cmd} {' '.join(args)}")
-
+        logger.info(
+            f"Launching upstream: {self.config.upstream_command} "
+            f"{' '.join(self.config.upstream_args)}"
+        )
         self.upstream_process = await asyncio.create_subprocess_exec(
-            cmd,
-            *args,
+            self.config.upstream_command,
+            *self.config.upstream_args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -200,7 +211,6 @@ class PACTAXProxy:
         asyncio.create_task(self._drain_upstream_stderr())
 
     async def _drain_upstream_stderr(self):
-        """Forward upstream stderr to our stderr so it's visible in logs."""
         while True:
             line = await self.upstream_process.stderr.readline()
             if not line:
@@ -211,15 +221,15 @@ class PACTAXProxy:
     # Proxy loop
     # ------------------------------------------------------------------
 
-    async def _run_stdio_proxy(self):
-        c2u = asyncio.create_task(self._proxy_client_to_upstream())
-        u2c = asyncio.create_task(self._proxy_upstream_to_client())
+    async def _run_proxy(self):
+        c2u = asyncio.create_task(self._client_to_upstream())
+        u2c = asyncio.create_task(self._upstream_to_client())
 
         done, pending = await asyncio.wait(
             [c2u, u2c], return_when=asyncio.FIRST_COMPLETED
         )
-        for task in pending:
-            task.cancel()
+        for t in pending:
+            t.cancel()
 
         if self.upstream_process:
             try:
@@ -227,10 +237,10 @@ class PACTAXProxy:
             except ProcessLookupError:
                 pass
 
-        self._log_session_summary()
+        self._log_summary()
 
-    async def _proxy_client_to_upstream(self):
-        """Cursor → PACT-AX → GitHub MCP."""
+    async def _client_to_upstream(self):
+        """Cursor → PACT-AX evaluation → GitHub MCP."""
         loop = asyncio.get_running_loop()
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader)
@@ -240,7 +250,6 @@ class PACTAXProxy:
             line = await reader.readline()
             if not line:
                 break
-
             stripped = line.strip()
             if not stripped:
                 continue
@@ -248,11 +257,9 @@ class PACTAXProxy:
             try:
                 msg = MCPMessage(stripped)
                 self.messages_processed += 1
-
-                should_forward, alert = self._evaluate_outgoing(msg)
+                should_forward, alert = self._evaluate(msg)
 
                 if alert:
-                    self.drift_alerts += 1
                     logger.warning(alert)
 
                 if should_forward:
@@ -260,85 +267,116 @@ class PACTAXProxy:
                     await self.upstream_process.stdin.drain()
                 else:
                     self.blocked_requests += 1
-                    logger.warning(f"Blocked: {msg.method}")
-                    await self._send_blocked_response(msg)
+                    await self._send_blocked(msg)
 
             except (json.JSONDecodeError, UnicodeDecodeError):
-                # Pass non-JSON through unchanged (e.g., handshake bytes)
                 self.upstream_process.stdin.write(line)
                 await self.upstream_process.stdin.drain()
 
-    async def _proxy_upstream_to_client(self):
-        """GitHub MCP → PACT-AX → Cursor."""
+    async def _upstream_to_client(self):
+        """GitHub MCP → Cursor (pass-through; annotate in future)."""
         while True:
             line = await self.upstream_process.stdout.readline()
             if not line:
                 break
-
             stripped = line.strip()
             if not stripped:
                 continue
-
             try:
                 msg = MCPMessage(stripped)
-                annotated = self._annotate_response(msg)
-                sys.stdout.buffer.write(annotated.to_bytes() + b"\n")
+                sys.stdout.buffer.write(msg.to_bytes() + b"\n")
                 sys.stdout.buffer.flush()
             except (json.JSONDecodeError, UnicodeDecodeError):
                 sys.stdout.buffer.write(line)
                 sys.stdout.buffer.flush()
 
     # ------------------------------------------------------------------
-    # PACT-AX evaluation
+    # Two-layer evaluation
     # ------------------------------------------------------------------
 
-    def _evaluate_outgoing(self, msg: MCPMessage) -> tuple[bool, Optional[str]]:
-        """Run the message through StoryKeeper and decide whether to forward."""
+    def _evaluate(self, msg: MCPMessage) -> tuple:
+        """
+        Run the message through both integrity layers.
+
+        Returns:
+            (should_forward: bool, alert: Optional[str])
+        """
         if not msg.is_request:
             return True, None
 
-        event, alert = self.story_keeper.record_event(
+        # ── Layer 1: StoryKeeper ──────────────────────────────────
+        event, drift_alert = self.story_keeper.record_event(
             session_id=self.session_id,
             method=msg.method,
             params=msg.params,
         )
-
         session = self.story_keeper.sessions[self.session_id]
+
+        if drift_alert:
+            self.drift_alerts += 1
+
+        # ── Layer 2: RLP-0 ───────────────────────────────────────
+        rupture_risk, is_gated = self.rlp_bridge.sync(session)
+        primitives = self.rlp_bridge.primitive_snapshot()
+
         logger.info(
-            f"[{msg.method}] pattern={event.resource_pattern} "
+            f"[{msg.method}] "
+            f"pattern={event.resource_pattern} "
             f"coherence={event.coherence_score:.2f} "
             f"trust={session.trust_level:.2f} "
-            f"traj={session.trajectory.value}"
+            f"traj={session.trajectory.value} "
+            f"rlp.rupture_risk={rupture_risk:.2f} "
+            f"rlp.gated={is_gated}"
         )
 
-        should_forward = True
-        if self.config.block_on_violation:
-            if session.trajectory == TrustTrajectory.VIOLATED:
-                should_forward = False
-            elif session.trust_level < self.config.trust_violation_threshold:
-                should_forward = False
+        # ── Gate decision ─────────────────────────────────────────
+        # RLP-0 gate has final authority
+        if is_gated:
+            self.rupture_events += 1
+            sig = self.rlp_bridge.last_rupture_signal
+            alert = (
+                f"[RLP-0 RUPTURE GATE CLOSED]\n"
+                f"Session         : {self.session_id}\n"
+                f"Rupture risk    : {rupture_risk:.2f} "
+                f"(threshold: {self.config.rupture_threshold})\n"
+                f"Signal          : {sig}\n"
+                f"RLP-0 primitives: {primitives}\n"
+                f"Gate status     : CLOSED — interaction blocked until repair acknowledged.\n"
+                f"---\n"
+                f"Policy sees: valid token, permitted scope ✓\n"
+                f"RLP-0 sees : relational rupture — trust={primitives['trust']:.2f} "
+                f"intent={primitives['intent']:.2f} "
+                f"narrative={primitives['narrative']:.2f}"
+            )
+            return False, alert
 
-        return should_forward, alert
+        # Legacy manual block (StoryKeeper drift without RLP-0 rupture)
+        if drift_alert and self.config.block_on_violation:
+            if session.trust_level < self.config.trust_violation_threshold:
+                return False, drift_alert
 
-    def _annotate_response(self, msg: MCPMessage) -> MCPMessage:
-        """
-        Optionally enrich upstream responses with PACT-AX context.
-        Currently a pass-through; extend here to add trust metadata.
-        """
-        return msg
+        return True, drift_alert
 
-    async def _send_blocked_response(self, original: MCPMessage):
-        summary = self.story_keeper.get_session_summary(self.session_id)
+    async def _send_blocked(self, original: MCPMessage):
+        rlp_status = self.rlp_bridge.status() if self.rlp_bridge else {}
+        sk_summary = self.story_keeper.get_session_summary(self.session_id)
+
         response = {
             "jsonrpc": "2.0",
             "id": original.id,
             "error": {
                 "code": -32001,
-                "message": "PACT-AX: request blocked — relational context violation",
+                "message": "PACT-AX: request blocked — relational integrity gate closed",
                 "data": {
-                    "session_id": self.session_id,
-                    "reason": "trust_violation",
-                    "summary": summary,
+                    "session_id":     self.session_id,
+                    "reason":         "rlp0_rupture_gate",
+                    "rupture_risk":   round(self.rlp_bridge.rupture_risk, 3),
+                    "rlp0_status":    rlp_status,
+                    "session_summary": sk_summary,
+                    "repair_hint": (
+                        "Call acknowledge_repair() on the RLP-0 bridge "
+                        "after the expression layer has addressed the rupture."
+                    ),
                 },
             },
         }
@@ -346,22 +384,27 @@ class PACTAXProxy:
         sys.stdout.buffer.flush()
 
     # ------------------------------------------------------------------
-    # Shutdown
+    # Summary
     # ------------------------------------------------------------------
 
-    def _log_session_summary(self):
-        summary = self.story_keeper.get_session_summary(self.session_id)
-        logger.info("=" * 60)
+    def _log_summary(self):
+        sk  = self.story_keeper.get_session_summary(self.session_id)
+        rlp = self.rlp_bridge.status() if self.rlp_bridge else {}
+
+        logger.info("=" * 62)
         logger.info("SESSION SUMMARY")
         logger.info(f"  Session ID        : {self.session_id}")
         logger.info(f"  Messages processed: {self.messages_processed}")
         logger.info(f"  Drift alerts      : {self.drift_alerts}")
+        logger.info(f"  RLP-0 ruptures    : {self.rupture_events}")
         logger.info(f"  Blocked requests  : {self.blocked_requests}")
-        logger.info(f"  Final trust level : {summary.get('trust_level', 'N/A'):.2f}")
-        logger.info(f"  Trust trajectory  : {summary.get('trajectory', 'N/A')}")
-        logger.info(f"  Drift risk        : {summary.get('drift_risk', 'N/A')}")
-        logger.info(f"  Patterns          : {summary.get('established_patterns', [])}")
-        logger.info("=" * 60)
+        logger.info(f"  SK trust level    : {sk.get('trust_level', '?'):.2f}")
+        logger.info(f"  SK trajectory     : {sk.get('trajectory', '?')}")
+        logger.info(f"  SK drift risk     : {sk.get('drift_risk', '?')}")
+        logger.info(f"  RLP-0 rupture_risk: {rlp.get('state', {}).get('rupture_risk', '?')}")
+        logger.info(f"  RLP-0 gated now   : {rlp.get('is_gated', '?')}")
+        logger.info(f"  Patterns          : {sk.get('established_patterns', [])}")
+        logger.info("=" * 62)
 
 
 # ---------------------------------------------------------------------------

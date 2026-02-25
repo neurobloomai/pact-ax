@@ -244,7 +244,7 @@ class PACTAXProxy:
         loop = asyncio.get_running_loop()
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader)
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+        await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
 
         while True:
             line = await reader.readline()

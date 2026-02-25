@@ -7,23 +7,33 @@ maintaining relational state through two layers:
     StoryKeeper  — behavioral coherence, pattern drift detection (AX expression layer)
     RLP-0        — relational primitive gating (rupture detection, gate authority)
 
-Architecture:
+Architecture (stdio mode — Docker/npx):
     Cursor stdin/stdout
           ↕  MCP JSON-RPC (newline-delimited)
     PACTAXProxy
           ├── StoryKeeper.record_event()   → coherence score, drift alert
           └── RLPBridge.sync()             → rupture_risk, gate open/closed
           ↕  subprocess stdin/stdout
-    Docker: ghcr.io/github/github-mcp-server
+    Docker/npx: GitHub MCP server
+          ↕
+    GitHub API
+
+Architecture (http mode — no Docker needed):
+    Cursor stdin/stdout
+          ↕  MCP JSON-RPC (newline-delimited)
+    PACTAXProxy  (same PACT-AX analysis)
+          ↕  HTTPS POST per message
+    https://api.githubcopilot.com/mcp/
           ↕
     GitHub API
 
 Environment variables:
-    GITHUB_PERSONAL_ACCESS_TOKEN   required — passed to upstream Docker container
-    PACT_UPSTREAM_MODE             docker (default) | npx
-    PACT_DRIFT_THRESHOLD           float, default 0.3  (StoryKeeper coherence floor)
-    PACT_RUPTURE_THRESHOLD         float, default 0.6  (RLP-0 rupture gate trigger)
-    PACT_BLOCK_ON_VIOLATION        true | false (default false) — legacy manual block
+    GITHUB_PERSONAL_ACCESS_TOKEN   required
+    PACT_UPSTREAM_MODE             http (no Docker) | docker (default) | npx
+    PACT_UPSTREAM_URL              override HTTP endpoint (default: api.githubcopilot.com/mcp/)
+    PACT_DRIFT_THRESHOLD           float, default 0.3
+    PACT_RUPTURE_THRESHOLD         float, default 0.6
+    PACT_BLOCK_ON_VIOLATION        true | false (default false)
 """
 
 from __future__ import annotations
@@ -36,6 +46,12 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 import logging
+
+try:
+    import httpx
+    _HTTPX_AVAILABLE = True
+except ImportError:
+    _HTTPX_AVAILABLE = False
 
 from .story_keeper import StoryKeeper, TrustTrajectory
 from .rlp_bridge import RLPBridge
@@ -69,6 +85,12 @@ class ProxyConfig:
             "PACT_BLOCK_ON_VIOLATION", "false"
         ).lower() == "true"
     )
+
+    @property
+    def upstream_url(self) -> str:
+        return os.environ.get(
+            "PACT_UPSTREAM_URL", "https://api.githubcopilot.com/mcp/"
+        )
 
     @property
     def upstream_command(self) -> str:
@@ -137,6 +159,34 @@ class MCPMessage:
 
 
 # ---------------------------------------------------------------------------
+# SSE parser
+# ---------------------------------------------------------------------------
+
+def _parse_sse(text: str) -> Optional[dict]:
+    """
+    Extract the first JSON payload from a Server-Sent Events body.
+
+    SSE lines look like:
+        data: {"jsonrpc":"2.0","id":1,"result":{...}}
+
+    Returns the parsed dict of the first ``data:`` line that contains
+    valid JSON, or None if nothing parseable is found.
+    """
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[len("data:"):].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Proxy
 # ---------------------------------------------------------------------------
 
@@ -192,7 +242,13 @@ class PACTAXProxy:
         )
         logger.info(f"Session: {self.session_id}")
 
-        await self._start_upstream()
+        if self.config.upstream_mode == "http":
+            logger.info(f"HTTP upstream: {self.config.upstream_url}")
+            if not _HTTPX_AVAILABLE:
+                raise RuntimeError("httpx is required for HTTP mode: pip install httpx")
+        else:
+            await self._start_upstream()
+
         await self._run_proxy()
 
     async def _start_upstream(self):
@@ -222,6 +278,10 @@ class PACTAXProxy:
     # ------------------------------------------------------------------
 
     async def _run_proxy(self):
+        if self.config.upstream_mode == "http":
+            await self._run_http_proxy()
+            return
+
         c2u = asyncio.create_task(self._client_to_upstream())
         u2c = asyncio.create_task(self._upstream_to_client())
 
@@ -242,13 +302,12 @@ class PACTAXProxy:
     async def _client_to_upstream(self):
         """Cursor → PACT-AX evaluation → GitHub MCP."""
         loop = asyncio.get_running_loop()
-        #reader = asyncio.StreamReader()
-        #protocol = asyncio.StreamReaderProtocol(reader)
-        # AFTER — works everywhere:
-        line = await loop.run_in_executor(None, sys.stdin.buffer.readline)  # blocks in thread pool until real data arrives
 
         while True:
-            line = await reader.readline()
+            # run_in_executor lets the event loop stay live while waiting for stdin.
+            # connect_read_pipe returns empty bytes immediately on Python 3.9 macOS
+            # when no data is available yet — treating it as EOF. This avoids that.
+            line = await loop.run_in_executor(None, sys.stdin.buffer.readline)
             if not line:
                 break
             stripped = line.strip()
@@ -290,6 +349,114 @@ class PACTAXProxy:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 sys.stdout.buffer.write(line)
                 sys.stdout.buffer.flush()
+
+    # ------------------------------------------------------------------
+    # HTTP upstream mode (no Docker/npx required)
+    # ------------------------------------------------------------------
+
+    async def _run_http_proxy(self):
+        """
+        HTTP upstream — reads MCP messages from stdin, POSTs each to the
+        GitHub remote MCP endpoint, writes responses back to stdout.
+
+        Handles:
+          - Session establishment via Mcp-Session-Id header
+          - 202 Accepted for notifications (no response body)
+          - SSE responses (text/event-stream)
+          - JSON responses (application/json)
+        """
+        pat = os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")
+        url = self.config.upstream_url
+        mcp_session_id: Optional[str] = None
+        loop = asyncio.get_running_loop()
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while True:
+                line = await loop.run_in_executor(None, sys.stdin.buffer.readline)
+                if not line:
+                    break
+                stripped = line.strip()
+                if not stripped:
+                    continue
+
+                try:
+                    msg = MCPMessage(stripped)
+                    self.messages_processed += 1
+
+                    # PACT-AX evaluation on requests only
+                    should_forward, alert = True, None
+                    if msg.is_request:
+                        should_forward, alert = self._evaluate(msg)
+                        if alert:
+                            logger.warning(alert)
+
+                    if not should_forward:
+                        self.blocked_requests += 1
+                        await self._send_blocked(msg)
+                        continue
+
+                    # Build headers
+                    headers = {
+                        "Authorization": f"Bearer {pat}",
+                        "Content-Type": "application/json",
+                        "Accept": "application/json, text/event-stream",
+                    }
+                    if mcp_session_id:
+                        headers["Mcp-Session-Id"] = mcp_session_id
+
+                    # POST to GitHub MCP endpoint
+                    try:
+                        resp = await client.post(url, headers=headers, json=msg.data)
+                    except httpx.RequestError as exc:
+                        logger.error(f"HTTP request failed: {exc}")
+                        if msg.is_request:
+                            err = {"jsonrpc":"2.0","id":msg.id,
+                                   "error":{"code":-32000,"message":str(exc)}}
+                            sys.stdout.buffer.write(json.dumps(err).encode() + b"\n")
+                            sys.stdout.buffer.flush()
+                        continue
+
+                    # Grab session ID on first response
+                    if not mcp_session_id:
+                        sid = resp.headers.get("mcp-session-id") or \
+                              resp.headers.get("Mcp-Session-Id")
+                        if sid:
+                            mcp_session_id = sid
+                            logger.info(f"HTTP session: {mcp_session_id}")
+
+                    # 202 = notification accepted, no body to forward
+                    if resp.status_code == 202:
+                        continue
+
+                    # Non-200 error
+                    if resp.status_code != 200:
+                        logger.warning(f"Upstream HTTP {resp.status_code}: {resp.text[:200]}")
+                        err = {"jsonrpc":"2.0","id":msg.id,
+                               "error":{"code":resp.status_code,"message":resp.text[:200]}}
+                        sys.stdout.buffer.write(json.dumps(err).encode() + b"\n")
+                        sys.stdout.buffer.flush()
+                        continue
+
+                    # Parse body — JSON or SSE
+                    ct = resp.headers.get("content-type", "")
+                    if "text/event-stream" in ct:
+                        response_data = _parse_sse(resp.text)
+                    else:
+                        try:
+                            response_data = resp.json()
+                        except Exception:
+                            response_data = None
+
+                    if response_data:
+                        sys.stdout.buffer.write(
+                            json.dumps(response_data).encode() + b"\n"
+                        )
+                        sys.stdout.buffer.flush()
+
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass  # non-JSON input — skip
+
+        self._log_summary()
 
     # ------------------------------------------------------------------
     # Two-layer evaluation

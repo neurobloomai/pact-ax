@@ -6,7 +6,7 @@ Drives the actual proxy via subprocess with live MCP JSON-RPC messages.
 
 Full stack:
   demo.py
-    → proxy.src subprocess
+    → proxy.src.proxy subprocess
         → StoryKeeper  (behavioral drift detection)
         → RLPBridge    (RLP-0 gate: trust · intent · narrative · commitments)
         → Docker: ghcr.io/github/github-mcp-server
@@ -134,7 +134,7 @@ class Demo:
         env.setdefault("PACT_RUPTURE_THRESHOLD", "0.6")
 
         self.proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "proxy.src.proxy",
+            sys.executable, "-m", "proxy.src",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -212,9 +212,11 @@ class Demo:
         rup_color = R if (rup or 0) > 0.5 else Y if (rup or 0) > 0.3 else G
         gate_str = f"{R}{BOLD}CLOSED{RST}" if gated else f"{G}open{RST}"
 
+        coh_str   = f"{coh:.2f}"   if coh   is not None else "—"
+        trust_str = f"{trust:.2f}" if trust is not None else "—"
         print(
-            f"  {ind}  coherence={BOLD}{coh:.2f if coh else '—'}{RST}  "
-            f"trust={trust:.2f if trust else '—'}  "
+            f"  {ind}  coherence={BOLD}{coh_str}{RST}  "
+            f"trust={trust_str}  "
             f"traj={self.log.sk_traj or '—'}  │  "
             f"rlp.rupture={rup_color}{rup_str}{RST}  gate={gate_str}"
         )

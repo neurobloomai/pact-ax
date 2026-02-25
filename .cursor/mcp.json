@@ -1,1 +1,14 @@
-
+{
+  "mcpServers": {
+    "github": {
+      "command": "python",
+      "args": ["-m", "proxy.src.proxy"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${env:GITHUB_PERSONAL_ACCESS_TOKEN}",
+        "PACT_UPSTREAM_MODE": "docker",
+        "PACT_DRIFT_THRESHOLD": "0.3",
+        "PACT_BLOCK_ON_VIOLATION": "false"
+      }
+    }
+  }
+}

@@ -242,9 +242,10 @@ class PACTAXProxy:
     async def _client_to_upstream(self):
         """Cursor → PACT-AX evaluation → GitHub MCP."""
         loop = asyncio.get_running_loop()
-        reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
+        #reader = asyncio.StreamReader()
+        #protocol = asyncio.StreamReaderProtocol(reader)
+        # AFTER — works everywhere:
+        line = await loop.run_in_executor(None, sys.stdin.buffer.readline)  # blocks in thread pool until real data arrives
 
         while True:
             line = await reader.readline()

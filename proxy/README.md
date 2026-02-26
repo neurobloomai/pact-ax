@@ -184,6 +184,7 @@ All settings are environment variables. See `config.example.yaml` for the full r
 | `PACT_BLOCK_ON_VIOLATION` | `false` | Also block on StoryKeeper drift (without RLP-0 rupture) |
 | `PACT_WARMUP_CALLS` | `3` | Requests forwarded without gating while baseline builds |
 | `PACT_BLOCK_INJECTION` | `false` | Block (not just warn) when injection pattern found in response |
+| `PACT_AUDIT_LOG` | `./pact-ax-audit.jsonl` | Path to append-only JSONL audit log |
 
 ### Tuning the gate sensitivity
 
@@ -239,6 +240,34 @@ Add to `.cursor/mcp.json`:
 Restart Cursor — the proxy appears as a GitHub MCP server with session integrity baked in. Every tool call Cursor makes passes through both layers transparently.
 
 ---
+
+## Audit Log
+
+Every proxy instance appends to a shared JSONL file (`pact-ax-audit.jsonl` by default). Each line is one JSON record. Multiple simultaneous sessions write to the same file, distinguished by `session_id`.
+
+**Record types:** `session_start`, `warmup_request`, `request`, `injection_alert`, `gate_closed`, `gate_reopened`, `repair_invalid`, `session_end`
+
+**Example records:**
+```jsonl
+{"ts":"2026-02-26T10:00:00Z","event":"session_start","session_id":"pact-a3f9c1","upstream_mode":"http","rupture_threshold":0.6}
+{"ts":"2026-02-26T10:00:01Z","event":"session_start","session_id":"pact-a3f9c1","client":"pact-ax-demo:2.0.0","event_detail":"initialize_received"}
+{"ts":"2026-02-26T10:00:02Z","event":"warmup_request","session_id":"pact-a3f9c1","method":"tools/call","warmup_count":1,"warmup_total":3}
+{"ts":"2026-02-26T10:00:04Z","event":"request","session_id":"pact-a3f9c1","method":"tools/call","pattern":"repo:read:source","coherence":0.82,"trust":0.72,"trajectory":"BUILDING","rupture_risk":0.21,"gated":false}
+{"ts":"2026-02-26T10:00:09Z","event":"gate_closed","session_id":"pact-a3f9c1","rupture_risk":0.69,"repair_token":"a3f9c12b4e17","primitives":{"trust":0.29,"intent":0.35,"narrative":0.21,"commitments":0.6}}
+{"ts":"2026-02-26T10:00:15Z","event":"session_end","session_id":"pact-a3f9c1","client":"pact-ax-demo:2.0.0","messages_processed":10,"blocked_requests":4,"final_trust":0.29,"gate_closed":true}
+```
+
+**Query examples with jq:**
+```bash
+# All gate closure events across all sessions
+jq 'select(.event=="gate_closed")' pact-ax-audit.jsonl
+
+# Trust trajectory over time for a session
+jq 'select(.session_id=="pact-a3f9c1" and .event=="request") | {ts,trust,rupture_risk}' pact-ax-audit.jsonl
+
+# Sessions that ended with gate still closed
+jq 'select(.event=="session_end" and .gate_closed==true) | {session_id,client,final_trust,final_rupture_risk}' pact-ax-audit.jsonl
+```
 
 ## Related
 

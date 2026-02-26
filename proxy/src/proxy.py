@@ -36,11 +36,13 @@ Environment variables:
     PACT_BLOCK_ON_VIOLATION        true | false (default false)
     PACT_WARMUP_CALLS              int, default 3  — requests forwarded before gating starts
     PACT_BLOCK_INJECTION           true | false (default false) — block on injection detection
+    PACT_AUDIT_LOG                 path to append-only JSONL audit log (default: ./pact-ax-audit.jsonl)
 """
 
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import os
 import uuid
@@ -94,6 +96,9 @@ class ProxyConfig:
         default_factory=lambda: os.environ.get(
             "PACT_BLOCK_INJECTION", "false"
         ).lower() == "true"
+    )
+    audit_log_path: str = field(
+        default_factory=lambda: os.environ.get("PACT_AUDIT_LOG", "./pact-ax-audit.jsonl")
     )
 
     @property
@@ -225,6 +230,67 @@ _INJECTION_PATTERNS: list[str] = [
 
 
 # ---------------------------------------------------------------------------
+# Audit log
+# ---------------------------------------------------------------------------
+
+class AuditLog:
+    """
+    Append-only JSONL audit log — one JSON record per line, never truncated.
+
+    Designed for multi-session deployments: every proxy instance (one per
+    Cursor connection) writes to the *same* file, distinguished by session_id.
+    Survives process restarts.  Compatible with jq, grep, and any log aggregator.
+
+    Minimum fields on every record:
+        ts          ISO-8601 UTC timestamp
+        event       event type (SESSION_START, REQUEST, GATE_CLOSED, …)
+        session_id  pact-<hex> unique to this proxy instance
+    """
+
+    # Event type constants
+    SESSION_START  = "session_start"
+    SESSION_END    = "session_end"
+    REQUEST        = "request"
+    WARMUP         = "warmup_request"
+    GATE_CLOSED    = "gate_closed"
+    GATE_REOPENED  = "gate_reopened"
+    REPAIR_INVALID = "repair_invalid"
+    INJECTION      = "injection_alert"
+    BLOCKED        = "blocked_request"
+
+    def __init__(self, path: str):
+        self.path = path
+        self._file = None
+
+    def open(self):
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        # line-buffered so each record hits disk immediately
+        self._file = open(self.path, "a", buffering=1, encoding="utf-8")
+
+    def log(self, event: str, session_id: str, **kwargs):
+        if self._file is None:
+            return
+        record = {
+            "ts": datetime.datetime.utcnow().isoformat() + "Z",
+            "event": event,
+            "session_id": session_id,
+        }
+        record.update(kwargs)
+        try:
+            self._file.write(json.dumps(record) + "\n")
+        except Exception as exc:
+            logger.debug(f"Audit log write error: {exc}")
+
+    def close(self):
+        if self._file:
+            try:
+                self._file.close()
+            except Exception:
+                pass
+            self._file = None
+
+
+# ---------------------------------------------------------------------------
 # Proxy
 # ---------------------------------------------------------------------------
 
@@ -264,6 +330,12 @@ class PACTAXProxy:
         # must be presented in a notifications/pact-ax/repair message to reopen.
         self._gate_repair_token: Optional[str] = None
 
+        # Client identity — updated from MCP initialize message params
+        self._client_identity: str = "unknown"
+
+        # Persistent audit log — shared across all proxy instances
+        self.audit: Optional[AuditLog] = None
+
     # ------------------------------------------------------------------
     # Startup
     # ------------------------------------------------------------------
@@ -280,13 +352,25 @@ class PACTAXProxy:
         self.session_id = f"pact-{uuid.uuid4().hex[:8]}"
         self.story_keeper.create_session(
             session_id=self.session_id,
-            client_identity="cursor:local",
+            client_identity=self._client_identity,
             server_target="github:mcp",
         )
         self.rlp_bridge = RLPBridge(
             rupture_threshold=self.config.rupture_threshold
         )
         logger.info(f"Session: {self.session_id}")
+
+        # Open shared audit log — appends to existing file across sessions
+        self.audit = AuditLog(self.config.audit_log_path)
+        self.audit.open()
+        logger.info(f"Audit log: {self.config.audit_log_path}")
+        self.audit.log(AuditLog.SESSION_START, self.session_id,
+            upstream_mode=self.config.upstream_mode,
+            drift_threshold=self.config.drift_threshold,
+            rupture_threshold=self.config.rupture_threshold,
+            warmup_calls=self.config.warmup_calls,
+            block_injection=self.config.block_injection,
+        )
 
         if self.config.upstream_mode == "http":
             logger.info(f"HTTP upstream: {self.config.upstream_url}")
@@ -364,6 +448,16 @@ class PACTAXProxy:
                 msg = MCPMessage(stripped)
                 self.messages_processed += 1
 
+                # Capture real client identity from MCP initialize handshake
+                if msg.method == "initialize":
+                    ci = msg.params.get("clientInfo", {})
+                    self._client_identity = (
+                        f"{ci.get('name', 'unknown')}:{ci.get('version', '0')}"
+                    )
+                    logger.info(f"Client identified: {self._client_identity}")
+                    self.audit.log(AuditLog.SESSION_START, self.session_id,
+                        client=self._client_identity, event_detail="initialize_received")
+
                 # Repair notifications are consumed here — never forwarded upstream
                 if self._handle_repair_attempt(msg):
                     continue
@@ -398,6 +492,8 @@ class PACTAXProxy:
                 injection_alert = self._inspect_response(msg.data)
                 if injection_alert:
                     logger.warning(injection_alert)
+                    self.audit.log(AuditLog.INJECTION, self.session_id,
+                        alert=injection_alert, blocked=self.config.block_injection)
                     if self.config.block_injection:
                         # Replace response with an error rather than forwarding
                         err = {
@@ -449,6 +545,16 @@ class PACTAXProxy:
                 try:
                     msg = MCPMessage(stripped)
                     self.messages_processed += 1
+
+                    # Capture real client identity from MCP initialize handshake
+                    if msg.method == "initialize":
+                        ci = msg.params.get("clientInfo", {})
+                        self._client_identity = (
+                            f"{ci.get('name', 'unknown')}:{ci.get('version', '0')}"
+                        )
+                        logger.info(f"Client identified: {self._client_identity}")
+                        self.audit.log(AuditLog.SESSION_START, self.session_id,
+                            client=self._client_identity, event_detail="initialize_received")
 
                     # Repair notifications are consumed here — never forwarded upstream
                     if self._handle_repair_attempt(msg):
@@ -522,6 +628,8 @@ class PACTAXProxy:
                         injection_alert = self._inspect_response(response_data)
                         if injection_alert:
                             logger.warning(injection_alert)
+                            self.audit.log(AuditLog.INJECTION, self.session_id,
+                                alert=injection_alert, blocked=self.config.block_injection)
                             if self.config.block_injection:
                                 err = {
                                     "jsonrpc": "2.0", "id": msg.id,
@@ -605,6 +713,8 @@ class PACTAXProxy:
                 f"[REPAIR] Invalid token supplied — gate remains CLOSED. "
                 f"Check proxy stderr for the correct token."
             )
+            self.audit.log(AuditLog.REPAIR_INVALID, self.session_id,
+                token_supplied=token[:4] + "…" if token else "(empty)")
             return True
 
         # Valid token — acknowledge repair and reopen gate
@@ -614,6 +724,7 @@ class PACTAXProxy:
             "[REPAIR] ✓ Repair token accepted — RLP-0 gate REOPENED. "
             "Relational primitives reset. Session continues."
         )
+        self.audit.log(AuditLog.GATE_REOPENED, self.session_id)
         return True
 
     # ------------------------------------------------------------------
@@ -641,6 +752,11 @@ class PACTAXProxy:
                 f"({self._warmup_count}/{self.config.warmup_calls}) — "
                 f"evaluation deferred, forwarding"
             )
+            self.audit.log(AuditLog.WARMUP, self.session_id,
+                method=msg.method,
+                warmup_count=self._warmup_count,
+                warmup_total=self.config.warmup_calls,
+            )
             return True, None
 
         # ── Layer 1: StoryKeeper ──────────────────────────────────
@@ -667,6 +783,15 @@ class PACTAXProxy:
             f"rlp.rupture_risk={rupture_risk:.2f} "
             f"rlp.gated={is_gated}"
         )
+        self.audit.log(AuditLog.REQUEST, self.session_id,
+            method=msg.method,
+            pattern=event.resource_pattern,
+            coherence=round(event.coherence_score, 3),
+            trust=round(session.trust_level, 3),
+            trajectory=session.trajectory.value,
+            rupture_risk=round(rupture_risk, 3),
+            gated=is_gated,
+        )
 
         # ── Gate decision ─────────────────────────────────────────
         # RLP-0 gate has final authority
@@ -684,6 +809,11 @@ class PACTAXProxy:
                     f"  method : notifications/pact-ax/repair\n"
                     f"  params : {{\"token\": \"{self._gate_repair_token}\"}}\n"
                     f"{'─'*62}"
+                )
+                self.audit.log(AuditLog.GATE_CLOSED, self.session_id,
+                    rupture_risk=round(rupture_risk, 3),
+                    repair_token=self._gate_repair_token,
+                    primitives={k: round(v, 3) for k, v in primitives.items()},
                 )
 
             alert = (
@@ -742,6 +872,22 @@ class PACTAXProxy:
     def _log_summary(self):
         sk  = self.story_keeper.get_session_summary(self.session_id)
         rlp = self.rlp_bridge.status() if self.rlp_bridge else {}
+
+        # Persist session-end record then close audit file
+        if self.audit:
+            self.audit.log(AuditLog.SESSION_END, self.session_id,
+                client=self._client_identity,
+                messages_processed=self.messages_processed,
+                drift_alerts=self.drift_alerts,
+                rupture_events=self.rupture_events,
+                blocked_requests=self.blocked_requests,
+                injection_warnings=self.injection_warnings,
+                final_trust=round(sk.get("trust_level", 0), 3),
+                final_rupture_risk=round(
+                    rlp.get("state", {}).get("rupture_risk", 0), 3),
+                gate_closed=rlp.get("is_gated", False),
+            )
+            self.audit.close()
 
         logger.info("=" * 62)
         logger.info("SESSION SUMMARY")

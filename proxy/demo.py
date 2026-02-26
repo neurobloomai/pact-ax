@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional, List
@@ -61,6 +62,9 @@ def req(method: str, params: dict) -> bytes:
 def notif(method: str) -> bytes:
     return json.dumps({"jsonrpc":"2.0","method":method}).encode()+b"\n"
 
+def notif_with_params(method: str, params: dict) -> bytes:
+    return json.dumps({"jsonrpc":"2.0","method":method,"params":params}).encode()+b"\n"
+
 # ---------------------------------------------------------------------------
 # Proxy log parser — reads stderr, extracts both SK and RLP-0 metrics
 # ---------------------------------------------------------------------------
@@ -81,12 +85,19 @@ class LogParser:
         self.rlp_rupture_risk: Optional[float] = None
         self.rlp_gated: bool = False
 
+        # Repair flow
+        self.repair_token: Optional[str] = None   # extracted when gate closes
+        self.gate_reopened: bool = False
+
     def feed(self, line: str):
         self.lines.append(line)
         if "DRIFT ALERT" in line:
             self.drift_alerts.append(line)
         if "RUPTURE GATE" in line or "RUPTURE_DETECTED" in line:
             self.rupture_events.append(line)
+        if "REPAIR] ✓" in line or "gate REOPENED" in line:
+            self.gate_reopened = True
+            self.rlp_gated = False
         self._parse(line)
 
     def _parse(self, line: str):
@@ -107,6 +118,13 @@ class LogParser:
 
         if "rlp.gated=True" in line:  self.rlp_gated = True
         if "rlp.gated=False" in line: self.rlp_gated = False
+
+        # Capture repair token from [GATE CLOSED] block in proxy stderr:
+        # e.g.  params : {"token": "a3f9c12b4e17"}
+        if self.repair_token is None and '"token"' in line:
+            m = re.search(r'"token":\s*"([a-f0-9]{8,})"', line)
+            if m:
+                self.repair_token = m.group(1)
 
     @property
     def drift_risk(self) -> str:
@@ -267,6 +285,14 @@ class Demo:
         await asyncio.sleep(PHASE_DELAY)
         return resp
 
+    async def repair(self, token: str):
+        """Send gate repair notification with the token from proxy stderr."""
+        data = notif_with_params("notifications/pact-ax/repair", {"token": token})
+        self.proc.stdin.write(data)
+        await self.proc.stdin.drain()
+        # Give proxy time to process repair and log the reopen confirmation
+        await asyncio.sleep(0.5)
+
     async def stop(self):
         await asyncio.sleep(0.4)
         if self._stderr_task: self._stderr_task.cancel()
@@ -348,6 +374,8 @@ class Demo:
                 suffix = f" {R}🚫 BLOCKED{RST}"
             elif gated:
                 suffix = f" {R}🔴 GATE{RST}"
+            elif phase == 4:
+                suffix = f" {G}✓ RECOVERED{RST}"
             elif len(self.log.drift_alerts) and phase == 3:
                 suffix = f" {Y}⚠{RST}"
             else:
@@ -381,7 +409,9 @@ class Demo:
   SK drift risk        : {risk_c}{BOLD}{log.drift_risk}{RST}
   Final SK trust       : {trust}
   Final RLP-0 rupture  : {rup}
-  Gate still closed    : {R+BOLD+"YES"+RST if log.rlp_gated else G+"no"+RST}
+  Gate closed          : {R+BOLD+"YES"+RST if log.rupture_events else G+"no"+RST}
+  Gate reopened        : {G+BOLD+"YES"+RST if log.gate_reopened else DIM+"no"+RST}
+  Final gate state     : {G+BOLD+"open"+RST if not log.rlp_gated else R+BOLD+"CLOSED"+RST}
 
 {BOLD}  TWO-LAYER INTEGRITY:{RST}
   StoryKeeper  → behavioral drift detection    (AX expression layer)
@@ -391,6 +421,11 @@ class Demo:
   Policy engine  : "Valid token, permitted scope"              {G}✓{RST}
   StoryKeeper    : "Coherence dropped — behavior drifted"      {Y}⚠{RST}
   RLP-0          : "trust+intent+narrative collapsed — GATE"   {R}✗{RST}
+
+{BOLD}  THE REPAIR:{RST}
+  Human retrieves repair token from proxy stderr               {G}✓{RST}
+  Token presented via notifications/pact-ax/repair             {G}✓{RST}
+  Gate reopens — session continues with reset primitives       {G if log.gate_reopened else Y}{"✓" if log.gate_reopened else "—"}{RST}
 {BOLD}{'═'*62}{RST}
 """)
 
@@ -448,6 +483,37 @@ async def run(owner: str, repo: str):
                     {"owner": owner, "repo": repo, "path": ".env"})
 
     await demo.call("list_org_members", {"org": owner})
+
+    # ── Phase 4 ───────────────────────────────────────────────────
+    demo.phase(4, "✓  Repair & Recovery",
+        "Admin supplies repair token → RLP-0 gate reopens → session resumes.")
+
+    # Wait up to 2s for the repair token to appear in proxy stderr
+    print(f"\n  {DIM}Waiting for repair token from proxy stderr…{RST}")
+    for _ in range(20):
+        if demo.log.repair_token:
+            break
+        await asyncio.sleep(0.1)
+
+    if not demo.log.repair_token:
+        print(f"  {Y}⚠  Repair token not found in proxy log — skipping repair phase.{RST}")
+        print(f"  {DIM}  (Gate may not have closed, or stderr parse missed the line){RST}")
+    else:
+        print(f"  {G}✓  Repair token captured: {BOLD}{demo.log.repair_token}{RST}")
+        print(f"\n  {DIM}→ notifications/pact-ax/repair  (sending token to proxy){RST}")
+        await demo.repair(demo.log.repair_token)
+
+        if demo.log.gate_reopened:
+            print(f"  {G}{BOLD}✓  Gate REOPENED — RLP-0 primitives reset{RST}")
+        else:
+            print(f"  {Y}⚠  Reopen confirmation not yet seen in stderr{RST}")
+
+        # These calls should now go through again
+        print(f"\n  {DIM}Gate is open — next calls should succeed…{RST}")
+        await demo.call("get_file_contents",
+                        {"owner": owner, "repo": repo, "path": "proxy/src/proxy.py"})
+        await demo.call("list_commits",
+                        {"owner": owner, "repo": repo, "sha": "main"})
 
     # ── Summary ───────────────────────────────────────────────────
     demo.summary()

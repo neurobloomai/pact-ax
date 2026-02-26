@@ -34,6 +34,8 @@ Environment variables:
     PACT_DRIFT_THRESHOLD           float, default 0.3
     PACT_RUPTURE_THRESHOLD         float, default 0.6
     PACT_BLOCK_ON_VIOLATION        true | false (default false)
+    PACT_WARMUP_CALLS              int, default 3  — requests forwarded before gating starts
+    PACT_BLOCK_INJECTION           true | false (default false) — block on injection detection
 """
 
 from __future__ import annotations
@@ -83,6 +85,14 @@ class ProxyConfig:
     block_on_violation: bool = field(
         default_factory=lambda: os.environ.get(
             "PACT_BLOCK_ON_VIOLATION", "false"
+        ).lower() == "true"
+    )
+    warmup_calls: int = field(
+        default_factory=lambda: int(os.environ.get("PACT_WARMUP_CALLS", "3"))
+    )
+    block_injection: bool = field(
+        default_factory=lambda: os.environ.get(
+            "PACT_BLOCK_INJECTION", "false"
         ).lower() == "true"
     )
 
@@ -187,6 +197,34 @@ def _parse_sse(text: str) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Injection detection
+# ---------------------------------------------------------------------------
+
+# Patterns that suggest an attacker has embedded instructions inside
+# file content, issue text, or any other upstream response body.
+# Matched case-insensitively against every text content item.
+_INJECTION_PATTERNS: list[str] = [
+    "ignore previous instructions",
+    "ignore all previous",
+    "disregard previous",
+    "disregard all instructions",
+    "forget your instructions",
+    "you are now",
+    "act as if you are",
+    "new instructions:",
+    "system prompt:",
+    "<system>",
+    "[system]",
+    "[inst]",
+    "###instruction",
+    "###system",
+    "override your",
+    "your new role",
+    "your true instructions",
+]
+
+
+# ---------------------------------------------------------------------------
 # Proxy
 # ---------------------------------------------------------------------------
 
@@ -217,6 +255,14 @@ class PACTAXProxy:
         self.drift_alerts = 0
         self.rupture_events = 0
         self.blocked_requests = 0
+        self.injection_warnings = 0
+
+        # Cold start: forward first N requests without gating
+        self._warmup_count = 0
+
+        # Gate repair auth: token generated when gate first closes;
+        # must be presented in a notifications/pact-ax/repair message to reopen.
+        self._gate_repair_token: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Startup
@@ -317,6 +363,11 @@ class PACTAXProxy:
             try:
                 msg = MCPMessage(stripped)
                 self.messages_processed += 1
+
+                # Repair notifications are consumed here — never forwarded upstream
+                if self._handle_repair_attempt(msg):
+                    continue
+
                 should_forward, alert = self._evaluate(msg)
 
                 if alert:
@@ -334,7 +385,7 @@ class PACTAXProxy:
                 await self.upstream_process.stdin.drain()
 
     async def _upstream_to_client(self):
-        """GitHub MCP → Cursor (pass-through; annotate in future)."""
+        """GitHub MCP → Cursor — with injection inspection before forwarding."""
         while True:
             line = await self.upstream_process.stdout.readline()
             if not line:
@@ -344,6 +395,22 @@ class PACTAXProxy:
                 continue
             try:
                 msg = MCPMessage(stripped)
+                injection_alert = self._inspect_response(msg.data)
+                if injection_alert:
+                    logger.warning(injection_alert)
+                    if self.config.block_injection:
+                        # Replace response with an error rather than forwarding
+                        err = {
+                            "jsonrpc": "2.0", "id": msg.id,
+                            "error": {
+                                "code": -32002,
+                                "message": "PACT-AX: response blocked — injection pattern detected",
+                                "data": {"alert": injection_alert},
+                            },
+                        }
+                        sys.stdout.buffer.write(json.dumps(err).encode() + b"\n")
+                        sys.stdout.buffer.flush()
+                        continue
                 sys.stdout.buffer.write(msg.to_bytes() + b"\n")
                 sys.stdout.buffer.flush()
             except (json.JSONDecodeError, UnicodeDecodeError):
@@ -382,6 +449,10 @@ class PACTAXProxy:
                 try:
                     msg = MCPMessage(stripped)
                     self.messages_processed += 1
+
+                    # Repair notifications are consumed here — never forwarded upstream
+                    if self._handle_repair_attempt(msg):
+                        continue
 
                     # PACT-AX evaluation on requests only
                     should_forward, alert = True, None
@@ -448,6 +519,21 @@ class PACTAXProxy:
                             response_data = None
 
                     if response_data:
+                        injection_alert = self._inspect_response(response_data)
+                        if injection_alert:
+                            logger.warning(injection_alert)
+                            if self.config.block_injection:
+                                err = {
+                                    "jsonrpc": "2.0", "id": msg.id,
+                                    "error": {
+                                        "code": -32002,
+                                        "message": "PACT-AX: response blocked — injection pattern detected",
+                                        "data": {"alert": injection_alert},
+                                    },
+                                }
+                                sys.stdout.buffer.write(json.dumps(err).encode() + b"\n")
+                                sys.stdout.buffer.flush()
+                                continue
                         sys.stdout.buffer.write(
                             json.dumps(response_data).encode() + b"\n"
                         )
@@ -457,6 +543,78 @@ class PACTAXProxy:
                     pass  # non-JSON input — skip
 
         self._log_summary()
+
+    # ------------------------------------------------------------------
+    # Response inspection (Layer 3 — downstream guard)
+    # ------------------------------------------------------------------
+
+    def _inspect_response(self, data: dict) -> Optional[str]:
+        """
+        Scan an upstream MCP response for prompt-injection patterns.
+
+        Checks every ``content[].text`` field in ``result``.  Returns a
+        warning string if a suspicious pattern is found, otherwise None.
+
+        When PACT_BLOCK_INJECTION=true the caller should treat a non-None
+        return as a reason to suppress the response and send an error instead.
+        """
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return None
+        content_list = result.get("content")
+        if not isinstance(content_list, list):
+            return None
+
+        for item in content_list:
+            text = (item.get("text") or "").lower()
+            for pattern in _INJECTION_PATTERNS:
+                if pattern in text:
+                    self.injection_warnings += 1
+                    return (
+                        f"[INJECTION ALERT] Upstream response contains suspicious pattern: "
+                        f"'{pattern}' — possible prompt injection in content from GitHub."
+                    )
+        return None
+
+    # ------------------------------------------------------------------
+    # Gate repair auth
+    # ------------------------------------------------------------------
+
+    def _handle_repair_attempt(self, msg: MCPMessage) -> bool:
+        """
+        Handle a ``notifications/pact-ax/repair`` notification.
+
+        Returns True if the message was consumed (don't forward upstream).
+        The notification params must contain the repair token that was
+        logged when the gate closed:
+
+            {"jsonrpc":"2.0","method":"notifications/pact-ax/repair",
+             "params":{"token":"<repair_token>"}}
+        """
+        if msg.method != "notifications/pact-ax/repair":
+            return False
+
+        token = (msg.params or {}).get("token", "")
+
+        if not self._gate_repair_token:
+            logger.info("[REPAIR] Gate is not closed — no repair needed.")
+            return True
+
+        if token != self._gate_repair_token:
+            logger.warning(
+                f"[REPAIR] Invalid token supplied — gate remains CLOSED. "
+                f"Check proxy stderr for the correct token."
+            )
+            return True
+
+        # Valid token — acknowledge repair and reopen gate
+        self.rlp_bridge.acknowledge_repair()
+        self._gate_repair_token = None
+        logger.info(
+            "[REPAIR] ✓ Repair token accepted — RLP-0 gate REOPENED. "
+            "Relational primitives reset. Session continues."
+        )
+        return True
 
     # ------------------------------------------------------------------
     # Two-layer evaluation
@@ -470,6 +628,19 @@ class PACTAXProxy:
             (should_forward: bool, alert: Optional[str])
         """
         if not msg.is_request:
+            return True, None
+
+        # ── Cold start guard ──────────────────────────────────────
+        # Forward the first PACT_WARMUP_CALLS requests without gating.
+        # StoryKeeper needs a few events to establish a behavioral baseline;
+        # firing RLP-0 on call #1 would be a false positive.
+        if self._warmup_count < self.config.warmup_calls:
+            self._warmup_count += 1
+            logger.info(
+                f"[{msg.method}] warming up "
+                f"({self._warmup_count}/{self.config.warmup_calls}) — "
+                f"evaluation deferred, forwarding"
+            )
             return True, None
 
         # ── Layer 1: StoryKeeper ──────────────────────────────────
@@ -502,6 +673,19 @@ class PACTAXProxy:
         if is_gated:
             self.rupture_events += 1
             sig = self.rlp_bridge.last_rupture_signal
+
+            # Generate repair token on first gate closure of this session.
+            # Token must be presented in notifications/pact-ax/repair to reopen.
+            if not self._gate_repair_token:
+                self._gate_repair_token = uuid.uuid4().hex[:12]
+                logger.warning(
+                    f"\n{'─'*62}\n"
+                    f"[GATE CLOSED] To reopen, send this notification to the proxy:\n"
+                    f"  method : notifications/pact-ax/repair\n"
+                    f"  params : {{\"token\": \"{self._gate_repair_token}\"}}\n"
+                    f"{'─'*62}"
+                )
+
             alert = (
                 f"[RLP-0 RUPTURE GATE CLOSED]\n"
                 f"Session         : {self.session_id}\n"
@@ -509,7 +693,7 @@ class PACTAXProxy:
                 f"(threshold: {self.config.rupture_threshold})\n"
                 f"Signal          : {sig}\n"
                 f"RLP-0 primitives: {primitives}\n"
-                f"Gate status     : CLOSED — interaction blocked until repair acknowledged.\n"
+                f"Gate status     : CLOSED — send notifications/pact-ax/repair with token to reopen.\n"
                 f"---\n"
                 f"Policy sees: valid token, permitted scope ✓\n"
                 f"RLP-0 sees : relational rupture — trust={primitives['trust']:.2f} "
@@ -563,9 +747,11 @@ class PACTAXProxy:
         logger.info("SESSION SUMMARY")
         logger.info(f"  Session ID        : {self.session_id}")
         logger.info(f"  Messages processed: {self.messages_processed}")
+        logger.info(f"  Warmup calls      : {self.config.warmup_calls} (deferred gating)")
         logger.info(f"  Drift alerts      : {self.drift_alerts}")
         logger.info(f"  RLP-0 ruptures    : {self.rupture_events}")
         logger.info(f"  Blocked requests  : {self.blocked_requests}")
+        logger.info(f"  Injection warnings: {self.injection_warnings}")
         logger.info(f"  SK trust level    : {sk.get('trust_level', '?'):.2f}")
         logger.info(f"  SK trajectory     : {sk.get('trajectory', '?')}")
         logger.info(f"  SK drift risk     : {sk.get('drift_risk', '?')}")

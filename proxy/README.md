@@ -69,6 +69,16 @@ Computes `rupture_risk` from these four. When `rupture_risk > PACT_RUPTURE_THRES
 
 RLP-0's gate decision is **final** — it overrides all other settings including `PACT_BLOCK_ON_VIOLATION`.
 
+When the gate closes, a one-time **repair token** is printed to stderr. The gate will not reopen until that token is presented in a `notifications/pact-ax/repair` notification — no unauthenticated reopening.
+
+### Layer 3 — Response Inspection (downstream guard)
+
+Every upstream response is scanned for prompt-injection patterns (`ignore previous instructions`, `<system>`, `you are now`, etc.) before being forwarded to the client. By default this logs a warning; set `PACT_BLOCK_INJECTION=true` to suppress the response and return an error instead.
+
+### Cold Start Guard
+
+The first `PACT_WARMUP_CALLS` (default: 3) requests are forwarded without gating, giving StoryKeeper time to establish a behavioral baseline before RLP-0 starts evaluating primitives. This prevents false positives on session startup.
+
 ---
 
 ## Quick Start
@@ -172,6 +182,8 @@ All settings are environment variables. See `config.example.yaml` for the full r
 | `PACT_DRIFT_THRESHOLD` | `0.3` | Coherence below this → StoryKeeper drift alert |
 | `PACT_RUPTURE_THRESHOLD` | `0.6` | Rupture risk above this → RLP-0 gate closes |
 | `PACT_BLOCK_ON_VIOLATION` | `false` | Also block on StoryKeeper drift (without RLP-0 rupture) |
+| `PACT_WARMUP_CALLS` | `3` | Requests forwarded without gating while baseline builds |
+| `PACT_BLOCK_INJECTION` | `false` | Block (not just warn) when injection pattern found in response |
 
 ### Tuning the gate sensitivity
 

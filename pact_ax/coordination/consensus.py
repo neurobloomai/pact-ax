@@ -315,7 +315,7 @@ class ConsensusProtocol:
         weights, _ = self._tally(votes, trust_scores)
         total_w     = sum(weights.values())
 
-        if winner_frac >= self.quorum_fraction:
+        if winner_frac > self.quorum_fraction:
             outcome = ConsensusOutcome.ACCEPTED
         elif winner_frac >= self.escalation_threshold:
             outcome = ConsensusOutcome.DEADLOCK

@@ -667,20 +667,27 @@ class StateTransferManager:
 
     def clear_completed(self) -> int:
         """
-        Remove outbound packets older than TTL that are INTEGRATED or FAILED.
-        Returns the number of packets cleared.
+        Remove packets older than TTL that are INTEGRATED, FAILED, or ROLLED_BACK.
+        Scans both outbound and inbound stores. Returns the number cleared.
         """
         cutoff = datetime.utcnow() - timedelta(minutes=self.packet_ttl_minutes)
         terminal = {TransferStatus.INTEGRATED, TransferStatus.FAILED, TransferStatus.ROLLED_BACK}
-        to_remove = [
+        to_remove_out = [
             pid for pid, p in self._outbound.items()
             if p.status in terminal and p.created_at < cutoff
         ]
-        for pid in to_remove:
+        to_remove_in = [
+            pid for pid, p in self._inbound.items()
+            if p.status in terminal and p.created_at < cutoff
+        ]
+        for pid in to_remove_out:
             del self._outbound[pid]
-        if to_remove:
-            logger.info("Cleared %d completed packets.", len(to_remove))
-        return len(to_remove)
+        for pid in to_remove_in:
+            del self._inbound[pid]
+        total = len(to_remove_out) + len(to_remove_in)
+        if total:
+            logger.info("Cleared %d completed packets.", total)
+        return total
 
     def summary(self) -> Dict[str, Any]:
         """Return an observability snapshot of this manager's state."""

@@ -196,7 +196,7 @@ class TestReceive:
         receiver.receive(packet)
         assert packet.status == TransferStatus.INTEGRATED
 
-    def test_invalid_packet_fails_gracefully(self, sender, simple_state):
+    def test_invalid_packet_fails_gracefully(self, sender, simple_state, receiver):
         pid    = sender.prepare(to_agent_id="agent-other", state_data=simple_state)
         packet = sender.send(pid)
         # receiver has different agent_id — should fail validation

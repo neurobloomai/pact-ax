@@ -288,24 +288,47 @@ class StateTransferManager:
         """Pull story summary from StoryKeeper, or return a stub."""
         if self.story_keeper is None:
             return {
-                "summary":        "No narrative context available (StoryKeeper not attached).",
-                "current_arc":    "unknown",
-                "arc_history":    [],
+                "summary":           "No narrative context available (StoryKeeper not attached).",
+                "current_arc":       "unknown",
+                "arc_history":       [],
                 "interaction_count": 0,
+                "what_we_were_doing": "",
+                "emotional_gravity":  0.5,
             }
         try:
             summary = self.story_keeper.get_story_summary()
-            recent  = self.story_keeper.recall_for_context(limit=5)
+            recent  = self.story_keeper.recall_for_context(k=5)
+            what_we_were_doing = self._summarise_recent(recent)
             return {
-                "summary":           summary,
-                "recent_context":    recent,
-                "current_arc":       getattr(self.story_keeper, "current_arc", "unknown"),
-                "arc_history":       summary.get("arc_transitions", []),
-                "interaction_count": summary.get("total_interactions", 0),
+                "summary":            summary,
+                "recent_context":     recent,
+                "current_arc":        getattr(self.story_keeper, "current_arc", "unknown"),
+                "arc_history":        summary.get("arc_transitions", []),
+                "interaction_count":  summary.get("total_interactions", 0),
+                "what_we_were_doing": what_we_were_doing,
+                "emotional_gravity":  self._emotional_gravity(summary),
             }
         except Exception as exc:
             logger.warning("StoryKeeper error during narrative build: %s", exc)
-            return {"summary": "Narrative unavailable.", "error": str(exc)}
+            return {"summary": "Narrative unavailable.", "error": str(exc),
+                    "what_we_were_doing": "", "emotional_gravity": 0.5}
+
+    @staticmethod
+    def _summarise_recent(interactions: list) -> str:
+        if not interactions:
+            return "Starting fresh collaboration"
+        excerpts = []
+        for ix in interactions[-3:]:
+            text = ix.get("user_input", "") if isinstance(ix, dict) else str(ix)
+            excerpts.append(text[:60] + "…" if len(text) > 60 else text)
+        return " → ".join(excerpts)
+
+    @staticmethod
+    def _emotional_gravity(summary: Dict[str, Any]) -> float:
+        gravity = 0.5
+        if summary.get("total_interactions", 0) > 10:
+            gravity += 0.1
+        return min(gravity, 1.0)
 
     def _serialize_epistemic(self, epistemic_states: list) -> List[Dict[str, Any]]:
         """
@@ -704,6 +727,133 @@ class StateTransferManager:
             "status_breakdown":  status_counts,
             "trust_floor":       self.trust_floor,
         }
+
+    # ── Convenience / backward-compat wrappers ───────────────────────────────
+
+    def prepare_handoff(
+        self,
+        target_agent: str,
+        state_data: Dict[str, Any],
+        handoff_reason: str = "continuation",
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Prepare and send a handoff in one call; return a narrative dict.
+
+        Convenience wrapper around prepare() + send() for callers that want
+        a simple dict-based interface rather than the full packet lifecycle.
+        """
+        reason_map = {r.value: r for r in HandoffReason}
+        reason = reason_map.get(handoff_reason, HandoffReason.CONTINUATION)
+
+        packet_id = self.prepare(
+            to_agent_id=target_agent,
+            state_data=state_data,
+            reason=reason,
+            context=context or {},
+        )
+        packet = self.send(packet_id)
+
+        gravity = self._emotional_gravity_from_reason(handoff_reason, state_data)
+        return {
+            "state": state_data,
+            "story_context": packet.narrative.get("summary"),
+            "narrative": {
+                "what_we_were_doing": packet.narrative.get("what_we_were_doing", ""),
+                "emotional_gravity":  gravity,
+                "why_it_matters":     self._why_it_matters(state_data, handoff_reason),
+                "current_arc":        str(packet.narrative.get("current_arc", "unknown")),
+                "handoff_reason":     handoff_reason,
+                "continuity_preserved": self.story_keeper is not None,
+            },
+            "transfer_meta": {
+                "from_agent":    self.agent_id,
+                "to_agent":      target_agent,
+                "timestamp":     packet.created_at.isoformat(),
+                "handoff_reason": handoff_reason,
+                "transfer_id":   packet.packet_id,
+            },
+            "additional_context": context or {},
+            "_packet": packet,
+        }
+
+    def receive_handoff(
+        self,
+        transfer_packet: Any,
+        integrate_story: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Receive a handoff and return a confirmation dict.
+
+        Accepts either a HandoffPacket directly or the dict produced by
+        prepare_handoff() (which carries a ``_packet`` key).
+        """
+        if isinstance(transfer_packet, HandoffPacket):
+            packet = transfer_packet
+        elif isinstance(transfer_packet, dict) and "_packet" in transfer_packet:
+            packet = transfer_packet["_packet"]
+        elif isinstance(transfer_packet, dict):
+            packet = HandoffPacket.from_dict(transfer_packet)
+        else:
+            raise TypeError(f"Unsupported transfer_packet type: {type(transfer_packet)}")
+
+        result = self.receive(packet)
+        narrative = (
+            transfer_packet.get("narrative", {})
+            if isinstance(transfer_packet, dict)
+            else packet.narrative
+        )
+
+        return {
+            "received":        result.success,
+            "from_agent":      packet.from_agent_id,
+            "state":           result.integrated_state.get("state_data", {}),
+            "story_integrated": integrate_story and self.story_keeper is not None,
+            "ready_to_continue": result.success,
+            "understanding":   narrative,
+            "timestamp":       datetime.utcnow().isoformat(),
+            "error":           result.error,
+        }
+
+    def create_checkpoint(
+        self,
+        checkpoint_name: str,
+        state_data: Optional[Dict[str, Any]] = None,
+        include_full_story: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Create a named checkpoint; return the checkpoint dict.
+
+        Convenience wrapper around checkpoint() that matches the
+        primitives-style API (name + optional state_data).
+        """
+        ckpt_id = self.checkpoint(
+            label=checkpoint_name,
+            state_data=state_data or {},
+        )
+        return self._checkpoints[ckpt_id]
+
+    @staticmethod
+    def _emotional_gravity_from_reason(reason: str, state_data: Dict[str, Any]) -> float:
+        gravity = 0.5
+        if reason == "escalation":
+            gravity += 0.3
+        elif reason == "completion":
+            gravity += 0.2
+        if state_data.get("progress", 0) > 0.7:
+            gravity += 0.2
+        return min(gravity, 1.0)
+
+    @staticmethod
+    def _why_it_matters(state_data: Dict[str, Any], reason: str) -> str:
+        task = state_data.get("current_task", "current task")
+        messages = {
+            "continuation": f"Continuing work on: {task}",
+            "pause":        f"Pausing work on: {task} (to be resumed later)",
+            "escalation":   f"Escalating: {task} (needs higher-capability agent)",
+            "completion":   f"Completing: {task} (final handoff)",
+        }
+        return messages.get(reason, f"Transferring: {task}")
 
     def __repr__(self) -> str:
         return (

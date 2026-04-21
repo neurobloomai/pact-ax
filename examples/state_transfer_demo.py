@@ -6,7 +6,7 @@ during agent handoffs.
 """
 
 from pact_ax.primitives.story_keeper import StoryKeeper
-from pact_ax.primitives.state_transfer import StateTransferManager
+from pact_ax.state import StateTransferManager
 
 
 def main():

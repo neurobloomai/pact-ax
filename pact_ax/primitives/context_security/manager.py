@@ -6,6 +6,7 @@ Central security primitive that enables trust-aware protection across all PACT-A
 Balances security with organic collaboration through adaptive, context-sensitive protection.
 """
 
+import logging
 from typing import Dict, Any, Optional, List, Tuple, Callable, Protocol
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -14,6 +15,8 @@ import uuid
 import json
 import threading
 from collections import defaultdict, deque
+
+logger = logging.getLogger(__name__)
 
 # Import from sibling primitives
 from ..context_share.schemas import (
@@ -592,7 +595,7 @@ class ContextSecurityManager:
             try:
                 handler(event)
             except Exception as e:
-                print(f"Event handler failed: {e}")
+                logger.error("Event handler failed: %s", e)
     
     def _learn_from_security_decision(self, 
                                     packet: ContextPacket, 

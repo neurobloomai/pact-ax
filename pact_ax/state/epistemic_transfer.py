@@ -3,7 +3,7 @@ PACT-AX Epistemic State Transfer
 Transfer knowledge WITH confidence, uncertainty, and boundaries
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from ..primitives.epistemic import EpistemicState, KnowledgeBoundary, BeliefUpdate
 

@@ -6,6 +6,7 @@ Dynamic policy engine that adapts security measures based on collaboration patte
 trust evolution, and environmental factors while maintaining organic collaboration flow.
 """
 
+import logging
 from typing import Dict, Any, Optional, List, Callable, Union, Set
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -13,6 +14,8 @@ from datetime import datetime, timezone, timedelta
 import json
 import re
 from abc import ABC, abstractmethod
+
+logger = logging.getLogger(__name__)
 
 # Import from sibling modules
 from ..context_share.schemas import (
@@ -549,9 +552,9 @@ class PolicyEngine:
         for policy_data in config.get("policies", {}).values():
             try:
                 policy = self.create_policy(policy_data)
-                print(f"Imported policy: {policy.name}")
+                logger.info("Imported policy: %s", policy.name)
             except Exception as e:
-                print(f"Failed to import policy {policy_data.get('name', 'unknown')}: {e}")
+                logger.warning("Failed to import policy %s: %s", policy_data.get("name", "unknown"), e)
         
         # Import templates
         if "templates" in config:

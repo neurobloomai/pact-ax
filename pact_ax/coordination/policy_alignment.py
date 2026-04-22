@@ -3,10 +3,13 @@ PACT-AX Policy Alignment with Epistemic Humility
 Policy decisions that respect knowledge boundaries and uncertainty
 """
 
+import logging
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from ..primitives.epistemic import (
     EpistemicState,
@@ -217,7 +220,7 @@ class PolicyAlignmentManager:
                 valid_decisions.append(decision)
             else:
                 # Log why decision was rejected
-                print(f"Rejected decision from {decision.agent_id}: {violations}")
+                logger.warning("Rejected decision from %s: %s", decision.agent_id, violations)
         
         if not valid_decisions:
             return PolicyDecision(

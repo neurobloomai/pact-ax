@@ -6,6 +6,7 @@ Enables organic context sharing with trust awareness and capability sensing.
 Built on principles of dynamic evolution and natural harmony.
 """
 
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 import time
 
@@ -266,7 +267,23 @@ class ContextShareManager:
             adjustment += 0.05
 
         now = time.time()
-        recent = [h for h in history if now - float(h.get("timestamp", now - 7200)) < 3600]
+
+        def _to_unix(h: Dict) -> float:
+            val = h.get("timestamp")
+            if val is None:
+                return now - 7200
+            if isinstance(val, (int, float)):
+                return float(val)
+            try:
+                from datetime import timezone as _tz
+                dt = datetime.fromisoformat(str(val))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=_tz.utc)
+                return dt.timestamp()
+            except (ValueError, TypeError):
+                return now - 7200
+
+        recent = [h for h in history if now - _to_unix(h) < 3600]
         if recent:
             positive = sum(1 for h in recent if h.get("outcome") == CollaborationOutcome.POSITIVE.value)
             positive_ratio = positive / len(recent)

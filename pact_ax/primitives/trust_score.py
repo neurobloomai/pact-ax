@@ -9,7 +9,8 @@ Manages evolving trust relationships between agents, supporting:
 """
 
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, Optional, List
+from pathlib import Path
+from typing import Dict, Any, Optional, List, Union
 
 from .context_share.schemas import (
     AgentTrustProfile,
@@ -265,6 +266,41 @@ class TrustManager:
     def reset_trust(self, target_id: str) -> None:
         """Remove all trust history for a specific agent."""
         self._profiles.pop(target_id, None)
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, db_path: Union[str, Path] = "trust.db") -> None:
+        """
+        Persist all trust profiles to a SQLite file.
+
+        Creates the file (and schema) if it does not yet exist.
+        Subsequent calls update existing rows in-place.
+        """
+        from .trust_store import TrustStore
+        store = TrustStore(db_path)
+        store.save_all(self.agent_id, self._profiles)
+
+    @classmethod
+    def load(
+        cls,
+        db_path: Union[str, Path],
+        agent_id: str,
+    ) -> "TrustManager":
+        """
+        Restore a TrustManager from a previously saved SQLite file.
+
+        Returns a fresh TrustManager (with default state) if the file
+        does not exist or contains no rows for *agent_id*.
+        """
+        from .trust_store import TrustStore
+        manager = cls(agent_id=agent_id)
+        if not Path(str(db_path)).exists() and str(db_path) != ":memory:":
+            return manager
+        store = TrustStore(db_path)
+        manager._profiles = store.load_profiles(agent_id)
+        return manager
 
     # ------------------------------------------------------------------
     # Internal helpers

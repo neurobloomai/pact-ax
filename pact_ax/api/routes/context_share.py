@@ -101,8 +101,8 @@ def create_packet(req: CreatePacketRequest) -> Dict[str, Any]:
     """Create a trust-aware context packet from one agent to another."""
     try:
         ctx_type = ContextType(req.context_type)
-        priority = Priority(req.priority)
-    except ValueError as exc:
+        priority = Priority[req.priority.upper()]
+    except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
     mgr = _get_manager(req.agent_id)
@@ -119,7 +119,7 @@ def create_packet(req: CreatePacketRequest) -> Dict[str, Any]:
         "to_agent":      packet.to_agent,
         "context_type":  packet.context_type.value,
         "priority":      packet.priority.value,
-        "trust_required": packet.trust_required.value,
+        "trust_required": packet.trust_required.name.lower(),
         "expires_at":    packet.expires_at.isoformat() if packet.expires_at else None,
     }
 

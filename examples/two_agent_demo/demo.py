@@ -37,8 +37,13 @@ import httpx
 # ── PACT-AX: use the live ASGI app in-process (no server needed) ──────────────
 from starlette.testclient import TestClient
 from pact_ax.api.server import app
+import pact_ax.api.routes.context_share as cs_module
+import pact_ax.api.routes.policy_align as pa_module
 
 pax = TestClient(app, raise_server_exceptions=True)
+
+# ── Persistent ledger ─────────────────────────────────────────────────────────
+_LEDGER_PATH = os.path.join(os.path.dirname(__file__), "demo_history.db")
 
 
 # ── Anthropic client (lazy) ───────────────────────────────────────────────────
@@ -101,26 +106,42 @@ def _pax(method: str, path: str, **kwargs) -> Dict[str, Any]:
 
 
 def _parse_llm_json(text: str) -> Dict[str, Any]:
-    """Extract JSON from an LLM response that may include prose."""
+    """Extract the first valid JSON object from an LLM response."""
     start = text.find("{")
-    end   = text.rfind("}") + 1
-    if start == -1 or end == 0:
+    if start == -1:
         raise ValueError(f"No JSON object found in LLM response:\n{text}")
-    return json.loads(text[start:end])
+    # Walk forward from the first { to find the matching }
+    depth, i = 0, start
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start:i + 1])
+    raise ValueError(f"Unmatched braces in LLM response:\n{text}")
 
 
 # ── Agent-A: tier-1 support ───────────────────────────────────────────────────
 
 AGENT_A_SYSTEM = textwrap.dedent("""
     You are Agent-A, a tier-1 customer support agent for a SaaS billing system.
-    Your refund authority is limited to $100.
-    You have access to basic account lookup but cannot override payment processor records.
 
-    When given a billing dispute, respond with a JSON object (and nothing else):
+    Hard rules — follow these before anything else:
+    - Your refund authority is capped at $100. Any dispute above $100 MUST be "escalate".
+    - You cannot access or override payment processor records. If that is needed, MUST be "escalate".
+    - "resolve"     — you can fully close this case yourself, right now, within your authority.
+    - "investigate" — you need more info BUT you will gather it and close it yourself (still within your authority).
+    - "escalate"    — the case exceeds your authority or requires tools you don't have. A specialist takes over.
+
+    Key: if your investigation would end in "I still can't fix it", skip straight to "escalate".
+    Your decision must be consistent with your reasoning.
+
+    Respond with a JSON object and nothing else:
     {
       "decision":   "resolve" | "escalate" | "investigate",
       "confidence": "CERTAIN" | "CONFIDENT" | "MODERATE" | "LOW",
-      "reasoning":  "<one or two sentences explaining your decision>"
+      "reasoning":  "<one sentence — state specifically what you can or cannot do>"
     }
 """).strip()
 
@@ -191,7 +212,7 @@ def run(dry_run: bool = False) -> None:
     print(f"  Amount:  ${CASE['amount']}")
     print(f"  Customer: {CASE['customer_name']}")
 
-    # ── 1. Register agents ────────────────────────────────────────────────────
+    # ── 1. Register agents + restore history ─────────────────────────────────
     _banner("Step 1 · Register agents")
     for agent_id, agent_type, caps in [
         ("agent-A", "tier1-support",      ["billing_basic", "account_lookup"]),
@@ -201,6 +222,17 @@ def run(dry_run: bool = False) -> None:
             "agent_id": agent_id, "agent_type": agent_type, "capabilities": caps,
         })
         print(f"  ✓ {agent_id} ({agent_type}) registered")
+
+    from ledger import DemoLedger
+    ledger = DemoLedger(_LEDGER_PATH)
+    restored = ledger.load(cs_module, pa_module)
+    history = ledger.history_summary()
+    run_number = history["total_policy_outcomes"] + 1
+    if restored:
+        print(f"  ↺ Ledger restored  — run #{run_number}  "
+              f"({history['total_policy_outcomes']} prior outcome(s))")
+    else:
+        print(f"  ✦ Fresh ledger  — run #1")
 
     # ── 2. Agent-A decides ────────────────────────────────────────────────────
     _banner("Step 2 · Agent-A evaluates the dispute")
@@ -235,7 +267,11 @@ def run(dry_run: bool = False) -> None:
     print(f"  Approaching limit: {capability['approaching_limit']}")
     print(f"  Recommendation:  {capability['recommendation']}")
 
-    needs_handoff = capability["approaching_limit"] or decision["decision"] == "escalate"
+    needs_handoff = (
+        capability["approaching_limit"]
+        or decision["decision"] == "escalate"
+        or decision["decision"] == "investigate"  # investigate + low authority → escalate
+    )
 
     if not needs_handoff:
         _banner("No handoff needed — Agent-A resolves directly")
@@ -330,6 +366,15 @@ def run(dry_run: bool = False) -> None:
     if ab_trust:
         print(f"  Collaboration:     {ab_trust.get('total_interactions', 0)} interaction(s), "
               f"trend {ab_trust.get('trend', 'stable')}")
+
+    # ── Persist state for next run ────────────────────────────────────────────
+    from ledger import DemoLedger
+    ledger = DemoLedger(_LEDGER_PATH)
+    saved = ledger.save(cs_module, pa_module)
+    summary = ledger.history_summary()
+    print(f"\n  Ledger saved {saved} record(s)  ·  "
+          f"total runs: {summary['total_policy_outcomes']}  ·  "
+          f"db: demo_history.db")
     print()
 
 

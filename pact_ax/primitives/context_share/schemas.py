@@ -185,9 +185,9 @@ class TrustEvolution:
         
         # Update trust level
         if outcome == CollaborationOutcome.POSITIVE:
-            self.current_level = min(1.0, self.current_level + (impact * 0.1))
+            self.current_level = min(0.95, self.current_level + (impact * 0.1))
         elif outcome == CollaborationOutcome.NEGATIVE:
-            self.current_level = max(0.0, self.current_level - (impact * 0.2))
+            self.current_level = max(0.05, self.current_level - (impact * 0.2))
         # Neutral and partial outcomes don't change trust significantly
         
         interaction["trust_after"] = self.current_level

@@ -234,6 +234,26 @@ def run(dry_run: bool = False) -> None:
     else:
         print(f"  ✦ Fresh ledger  — run #1")
 
+    # ── Loop 3: calibration → capability confidence ───────────────────────────
+    # If Agent-A's historical accuracy diverges from its stated confidence,
+    # adjust its stored capability score so the handoff threshold reflects
+    # what it actually delivers — not just what it claims.
+    calibration = pa_module._learner.get_agent_calibration("agent-A")
+    if "accuracy" in calibration and calibration["total_decisions"] >= 3:
+        accuracy   = calibration["accuracy"]
+        avg_conf   = calibration["avg_predicted_confidence"]
+        adjustment = accuracy - avg_conf          # positive = underconfident
+        base_cap   = 0.70                         # default capability score
+        adjusted   = round(max(0.10, min(0.95, base_cap + adjustment)), 3)
+        _pax("post", "/context/capability/update", json={
+            "agent_id": "agent-A", "task": "billing_dispute", "confidence": adjusted,
+        })
+        direction = "↑" if adjustment > 0.01 else ("↓" if adjustment < -0.01 else "→")
+        print(f"  ⟳ Loop 3  calibration adjustment {direction}{abs(adjustment):.2f}  "
+              f"→ capability set to {adjusted:.3f}  "
+              f"(accuracy {accuracy:.0%} vs stated {avg_conf:.0%}"
+              f", {calibration['tendency']})")
+
     # ── 2. Agent-A decides ────────────────────────────────────────────────────
     _banner("Step 2 · Agent-A evaluates the dispute")
     decision = agent_a_decide(CASE, dry_run)

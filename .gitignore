@@ -209,4 +209,4 @@ __marimo__/
 # Add to .gitignore
 node_modules/
 package-lock.json
-story_keeper_test/
+story_keeper_test/demo_history.db

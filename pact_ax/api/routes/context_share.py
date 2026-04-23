@@ -10,7 +10,7 @@ Managers are created on demand and held in a module-level in-memory registry
 
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from pact_ax.primitives.context_share.manager import ContextShareManager
 from pact_ax.primitives.context_share.schemas import ContextType, Priority
@@ -30,16 +30,16 @@ def _get_manager(agent_id: str) -> ContextShareManager:
 # ── Request / Response models ─────────────────────────────────────────────────
 
 class RegisterAgentRequest(BaseModel):
-    agent_id: str
-    agent_type: str = "generic"
+    agent_id: str = Field(..., min_length=1)
+    agent_type: str = Field("generic", min_length=1)
     version: str = "1.0.0"
     capabilities: List[str] = []
     specializations: List[str] = []
 
 
 class CreatePacketRequest(BaseModel):
-    agent_id: str
-    target_agent: str
+    agent_id: str = Field(..., min_length=1)
+    target_agent: str = Field(..., min_length=1)
     context_type: str
     payload: Dict[str, Any]
     priority: str = "normal"
@@ -47,36 +47,36 @@ class CreatePacketRequest(BaseModel):
 
 
 class AssessTrustRequest(BaseModel):
-    agent_id: str
-    target_agent: str
+    agent_id: str = Field(..., min_length=1)
+    target_agent: str = Field(..., min_length=1)
     context_type: str
     current_situation: Dict[str, Any] = {}
 
 
 class SenseCapabilityRequest(BaseModel):
-    agent_id: str
-    current_task: str
+    agent_id: str = Field(..., min_length=1)
+    current_task: str = Field(..., min_length=1)
     confidence_threshold: float = 0.7
 
 
 class UpdateConfidenceRequest(BaseModel):
-    agent_id: str
-    task: str
+    agent_id: str = Field(..., min_length=1)
+    task: str = Field(..., min_length=1)
     confidence: float
 
 
 class RecordOutcomeRequest(BaseModel):
-    agent_id: str
-    target_agent: str
+    agent_id: str = Field(..., min_length=1)
+    target_agent: str = Field(..., min_length=1)
     context_type: str
     outcome: str
     impact: float = 1.0
 
 
 class PrepareHandoffRequest(BaseModel):
-    agent_id: str
-    target_agent: str
-    current_task: str
+    agent_id: str = Field(..., min_length=1)
+    target_agent: str = Field(..., min_length=1)
+    current_task: str = Field(..., min_length=1)
     preserve_emotional_context: bool = True
     transfer_ownership: bool = True
 

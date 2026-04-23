@@ -122,7 +122,10 @@ class ContextShareManager:
         current_confidence = sensor.current_confidence if sensor else 1.0
 
         approaching_limit = current_confidence < confidence_threshold
-        limit_proximity = max(0.0, 1.0 - (current_confidence / confidence_threshold))
+        limit_proximity = (
+            max(0.0, 1.0 - (current_confidence / confidence_threshold))
+            if confidence_threshold > 0.0 else 0.0
+        )
 
         return {
             "task": current_task,

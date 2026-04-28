@@ -14,6 +14,10 @@ import uuid
 import json
 
 
+_TRUST_CEILING = 0.95   # No agent earns perfect trust
+_TRUST_FLOOR   = 0.05   # No agent bottoms out completely
+
+
 class ContextType(Enum):
     """Types of context that can be shared between agents"""
     TASK_KNOWLEDGE = "task_knowledge"
@@ -185,9 +189,9 @@ class TrustEvolution:
         
         # Update trust level
         if outcome == CollaborationOutcome.POSITIVE:
-            self.current_level = min(0.95, self.current_level + (impact * 0.1))
+            self.current_level = min(_TRUST_CEILING, self.current_level + (impact * 0.1))
         elif outcome == CollaborationOutcome.NEGATIVE:
-            self.current_level = max(0.05, self.current_level - (impact * 0.2))
+            self.current_level = max(_TRUST_FLOOR, self.current_level - (impact * 0.2))
         # Neutral and partial outcomes don't change trust significantly
         
         interaction["trust_after"] = self.current_level
@@ -254,7 +258,7 @@ class AgentTrustProfile:
             total_trust += evolution.current_level * weight
         
         if total_weight > 0:
-            self.overall_trust = total_trust / total_weight
+            self.overall_trust = max(_TRUST_FLOOR, min(_TRUST_CEILING, total_trust / total_weight))
 
 
 @dataclass
@@ -265,7 +269,7 @@ class CapabilitySensor:
     confidence_history: List[Dict[str, Any]] = field(default_factory=list)
     degradation_rate: float = 0.0  # How fast capability degrades
     recovery_rate: float = 0.1   # How fast capability recovers
-    threshold_warning: float = 0.7
+    threshold_warning: float = 0.9
     threshold_critical: float = 0.5
     
     def update_confidence(self, new_confidence: float, context: Dict[str, Any]):

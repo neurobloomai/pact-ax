@@ -115,7 +115,7 @@ class ContextShareManager:
     def sense_capability_limit(
         self,
         current_task: str,
-        confidence_threshold: float = 0.7,
+        confidence_threshold: float = 0.9,
     ) -> Dict[str, Any]:
         """Sense approaching capability limits for proactive handoff."""
         sensor = self.capability_sensors.get(current_task)
@@ -305,24 +305,108 @@ class ContextShareManager:
             return "immediate_handoff"
 
     def _gather_task_progress(self) -> Dict[str, Any]:
+        if not self.capability_sensors:
+            return {
+                "completion_percentage": 1.0,
+                "current_step": "idle",
+                "next_steps": [],
+                "blockers": [],
+            }
+
+        confidences = {t: s.current_confidence for t, s in self.capability_sensors.items()}
+        avg_confidence = sum(confidences.values()) / len(confidences)
+
+        # Task closest to its warning threshold is the active step
+        def _proximity(sensor: "CapabilitySensor") -> float:
+            return sensor.threshold_warning - sensor.current_confidence
+
+        active_sensor = max(self.capability_sensors.values(), key=_proximity)
+        current_step = active_sensor.task_type
+
+        next_steps = [
+            t for t, s in self.capability_sensors.items()
+            if s.current_confidence >= s.threshold_warning and t != current_step
+        ]
+
+        blockers = [
+            t for t, s in self.capability_sensors.items()
+            if s.current_confidence < s.threshold_critical
+        ]
+
         return {
-            "completion_percentage": 0.75,
-            "current_step": "analysis_phase",
-            "next_steps": ["validation", "implementation"],
-            "blockers": [],
+            "completion_percentage": round(avg_confidence, 3),
+            "current_step": current_step,
+            "next_steps": next_steps,
+            "blockers": blockers,
         }
 
     def _gather_emotional_context(self) -> Dict[str, Any]:
+        total_successes = sum(
+            p.get("successes", 0) for p in self.collaboration_patterns.values()
+        )
+        total_failures = sum(
+            p.get("failures", 0) for p in self.collaboration_patterns.values()
+        )
+        total = total_successes + total_failures
+
+        if total == 0:
+            sentiment = "neutral"
+        elif total_successes / total >= 0.7:
+            sentiment = "positive"
+        elif total_failures / total >= 0.5:
+            sentiment = "frustrated"
+        else:
+            sentiment = "neutral"
+
+        avg_trust = (
+            sum(p.overall_trust for p in self.trust_profiles.values()) / len(self.trust_profiles)
+            if self.trust_profiles else 0.5
+        )
+        interaction_tone = "collaborative" if avg_trust >= 0.7 else "cautious" if avg_trust >= 0.4 else "guarded"
+
+        stress_indicators = [
+            t for t, s in self.capability_sensors.items()
+            if s.current_confidence < s.threshold_warning
+        ]
+
+        preferred_context_types: Dict[str, int] = {}
+        for key, pattern in self.collaboration_patterns.items():
+            if pattern.get("successes", 0) > pattern.get("failures", 0):
+                context_type = key.split("_", 1)[-1] if "_" in key else key
+                preferred_context_types[context_type] = preferred_context_types.get(context_type, 0) + 1
+
         return {
-            "user_sentiment": "neutral",
-            "interaction_tone": "professional",
-            "stress_indicators": [],
-            "preferences": {},
+            "user_sentiment": sentiment,
+            "interaction_tone": interaction_tone,
+            "stress_indicators": stress_indicators,
+            "preferences": preferred_context_types,
         }
 
     def _generate_handoff_recommendations(self, task: str) -> List[str]:
-        return [
-            "Maintain current communication style",
-            "User prefers detailed explanations",
-            "Task complexity is moderate",
-        ]
+        recommendations: List[str] = []
+
+        sensor = self.capability_sensors.get(task)
+        if sensor:
+            if sensor.current_confidence < sensor.threshold_critical:
+                recommendations.append(f"Urgent: confidence on '{task}' is critically low ({sensor.current_confidence:.2f})")
+            elif sensor.current_confidence < sensor.threshold_warning:
+                recommendations.append(f"Monitor '{task}' closely — confidence approaching threshold ({sensor.current_confidence:.2f})")
+            if sensor.degradation_rate > 0.05:
+                recommendations.append(f"Capability degrading at rate {sensor.degradation_rate:.2f}; receiving agent should ramp up quickly")
+
+        for key, pattern in self.collaboration_patterns.items():
+            if task in key:
+                successes = pattern.get("successes", 0)
+                failures = pattern.get("failures", 0)
+                if successes + failures > 0:
+                    ratio = successes / (successes + failures)
+                    context_type = key.split("_", 1)[-1] if "_" in key else key
+                    if ratio >= 0.7:
+                        recommendations.append(f"Prior '{context_type}' collaborations succeeded {ratio:.0%} — continue this pattern")
+                    elif ratio < 0.4:
+                        recommendations.append(f"Prior '{context_type}' collaborations struggled ({ratio:.0%}) — adjust approach")
+
+        if not recommendations:
+            recommendations.append(f"No prior history for '{task}' — proceed with standard capability thresholds")
+
+        return recommendations

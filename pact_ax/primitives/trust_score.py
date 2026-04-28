@@ -18,6 +18,8 @@ from .context_share.schemas import (
     ContextType,
     TrustLevel,
     CollaborationOutcome,
+    _TRUST_CEILING,
+    _TRUST_FLOOR,
 )
 
 
@@ -148,7 +150,7 @@ class TrustManager:
             for evolution in profile.trust_evolution.values():
                 # Drift toward 0.5 (neutral)
                 evolution.current_level += (_DEFAULT_TRUST - evolution.current_level) * decay
-                evolution.current_level = max(0.0, min(1.0, evolution.current_level))
+                evolution.current_level = max(_TRUST_FLOOR, min(_TRUST_CEILING, evolution.current_level))
 
             # Recalculate overall trust
             evolutions = list(profile.trust_evolution.values())

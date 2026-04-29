@@ -22,6 +22,7 @@ from pact_ax.api.routes.context_share import router as context_router
 from pact_ax.api.routes.state_transfer import router as transfer_router
 from pact_ax.api.routes.policy_align import router as policy_router
 from pact_ax.api.routes.trust import router as trust_router
+from pact_ax.api.routes.story_keeper import router as story_router
 
 app = FastAPI(
     title="PACT-AX Agent Collaboration API",
@@ -40,6 +41,7 @@ app.include_router(context_router)
 app.include_router(transfer_router)
 app.include_router(policy_router)
 app.include_router(trust_router)
+app.include_router(story_router)
 
 
 @app.get("/health", tags=["meta"], summary="Health check")

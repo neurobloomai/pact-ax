@@ -1,3 +1,8 @@
+import os
+# Disable API key enforcement for primitive and route tests.
+# The access layer itself is tested via its own minimal app (test_access_layer.py).
+os.environ.setdefault("PACT_ENFORCE_AUTH", "0")
+
 import pytest
 from pathlib import Path
 import tempfile

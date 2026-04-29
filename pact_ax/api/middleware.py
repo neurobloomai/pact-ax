@@ -23,6 +23,7 @@ _OPEN_PATHS: Set[str] = {
     "/redoc",
     "/openapi.json",
     "/access/register",
+    "/access/verify",
 }
 
 

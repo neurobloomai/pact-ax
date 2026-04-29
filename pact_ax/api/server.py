@@ -21,12 +21,13 @@ from pact_ax.api.middleware import RequestLoggingMiddleware
 from pact_ax.api.routes.context_share import router as context_router
 from pact_ax.api.routes.state_transfer import router as transfer_router
 from pact_ax.api.routes.policy_align import router as policy_router
+from pact_ax.api.routes.trust import router as trust_router
 
 app = FastAPI(
     title="PACT-AX Agent Collaboration API",
     description=(
         "REST layer for PACT-AX primitives: context sharing, "
-        "state transfer, and policy alignment between heterogeneous AI agents."
+        "state transfer, policy alignment, and trust scoring between heterogeneous AI agents."
     ),
     version="0.1.0",
     docs_url="/docs",
@@ -38,6 +39,7 @@ app.add_middleware(RequestLoggingMiddleware)
 app.include_router(context_router)
 app.include_router(transfer_router)
 app.include_router(policy_router)
+app.include_router(trust_router)
 
 
 @app.get("/health", tags=["meta"], summary="Health check")

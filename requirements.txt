@@ -18,3 +18,4 @@ mypy>=1.0.0
 pre-commit>=3.0.0
 
 rlp-0 @ git+https://github.com/neurobloomai/rlp-0.git
+anthropic>=0.40.0

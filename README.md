@@ -248,6 +248,20 @@ bus.publish(AgentMessage(
 
 ---
 
+## Demos
+
+All demos and runnable examples live in **[neurobloomai/pact-demos](https://github.com/neurobloomai/pact-demos)** — including the five-primitive integration demo, the Orchestrator fan-out demo, and more.
+
+```bash
+git clone https://github.com/neurobloomai/pact-demos
+cd pact-demos
+pip install -r requirements.txt
+python demos/four_primitive/demo.py
+python demos/orchestrator/demo.py
+```
+
+---
+
 ## Quick Start
 
 ```python

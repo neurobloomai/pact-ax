@@ -8,6 +8,7 @@ from .story_keeper import StoryKeeper, StoryArc
 from pact_ax.state import StateTransferManager, HandoffReason, HandoffPacket, TransferStatus
 from .context_share import ContextShareManager, ContextType, TrustLevel, Priority
 from .trust_score import TrustManager
+from .capability_registry import CapabilityRegistry, Capability
 
 __all__ = [
     # Narrative continuity
@@ -25,4 +26,7 @@ __all__ = [
     "Priority",
     # Trust scoring
     "TrustManager",
+    # Capability discovery
+    "CapabilityRegistry",
+    "Capability",
 ]

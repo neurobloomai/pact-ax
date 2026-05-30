@@ -29,6 +29,8 @@ from pact_ax.api.routes.policy_align import router as policy_router
 from pact_ax.api.routes.trust import router as trust_router
 from pact_ax.api.routes.story_keeper import router as story_router
 from pact_ax.api.routes.seam_observer import router as seam_router
+from pact_ax.api.routes.capabilities import router as capabilities_router
+from pact_ax.api.routes.orchestrate import router as orchestrate_router
 
 # Shared access-layer singletons — same instances used by middleware and routes
 _key_store = KeyStore(db_path="access.db")
@@ -64,6 +66,8 @@ app.include_router(policy_router)
 app.include_router(trust_router)
 app.include_router(story_router)
 app.include_router(seam_router)
+app.include_router(capabilities_router)
+app.include_router(orchestrate_router)
 
 
 @app.get("/health", tags=["meta"], summary="Health check")

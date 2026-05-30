@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from pact_ax.coordination.policy_alignment import (
     PolicyAlignmentManager,
+    PolicyAgreement,
     PolicyDecision,
     PolicyConstraint,
     PolicyConflictResolution,
@@ -82,6 +83,21 @@ class ResolveRequest(BaseModel):
 class AlignRequest(BaseModel):
     decisions: List[Dict[str, Any]]
     agent_boundaries: Dict[str, List[Dict[str, Any]]] = {}
+
+
+class AgreeRequest(BaseModel):
+    from_agent:       str
+    to_agent:         str
+    delegated_scope:  List[str]
+    retained_scope:   List[str] = []
+    constraints:      List[str] = []
+    escalation_rules: List[str] = []
+
+
+class GateRequest(BaseModel):
+    from_agent: str
+    to_agent:   str
+    task:       str
 
 
 class RecordOutcomeRequest(BaseModel):
@@ -215,3 +231,47 @@ def record_outcome(req: RecordOutcomeRequest) -> Dict[str, Any]:
 def get_calibration(agent_id: str) -> Dict[str, Any]:
     """Return how well-calibrated an agent's confidence predictions are."""
     return _learner.get_agent_calibration(agent_id)
+
+
+# ── Pre-handoff agreement endpoints ──────────────────────────────────────────
+
+@router.post("/agree", summary="Negotiate a pre-handoff scope agreement")
+def agree(req: AgreeRequest) -> Dict[str, Any]:
+    """
+    Record a policy agreement between two agents before a handoff.
+    The agreement defines delegated scope, retained scope,
+    hard constraints, and escalation rules.
+    Returns an agreement_id to embed in the StateTransfer packet.
+    """
+    agreement = _manager.agree(
+        from_agent      = req.from_agent,
+        to_agent        = req.to_agent,
+        delegated_scope = req.delegated_scope,
+        retained_scope  = req.retained_scope,
+        constraints     = req.constraints,
+        escalation_rules= req.escalation_rules,
+    )
+    return agreement.to_dict()
+
+
+@router.post("/gate", summary="Gate a proposed handoff against active agreements")
+def gate(req: GateRequest) -> Dict[str, Any]:
+    """
+    Check whether a proposed handoff is covered by an active policy agreement.
+    Returns allowed (bool) and the reason.
+    """
+    allowed, reason = _manager.check_handoff(
+        from_agent = req.from_agent,
+        to_agent   = req.to_agent,
+        task       = req.task,
+    )
+    return {"allowed": allowed, "reason": reason}
+
+
+@router.get("/agreement/{agreement_id}", summary="Retrieve a policy agreement by ID")
+def get_agreement(agreement_id: str) -> Dict[str, Any]:
+    """Return the full agreement for embedding in a StateTransfer payload."""
+    agreement = _manager.get_agreement(agreement_id)
+    if agreement is None:
+        raise HTTPException(status_code=404, detail=f"Agreement {agreement_id!r} not found")
+    return agreement.to_dict()

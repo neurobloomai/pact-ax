@@ -4,7 +4,8 @@ Policy decisions that respect knowledge boundaries and uncertainty
 """
 
 import logging
-from typing import Dict, List, Optional, Set
+import uuid
+from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
@@ -87,6 +88,50 @@ class PolicyConstraint:
         return True
 
 
+@dataclass
+class PolicyAgreement:
+    """
+    A negotiated scope contract between two agents before a handoff.
+
+    Answers: what is Agent-B allowed to do, what is off-limits,
+    and when must it escalate?
+
+    This travels inside the StateTransfer packet so Agent-B is
+    bound by the agreed scope from the moment it receives the handoff.
+    """
+    agreement_id: str
+    from_agent:   str
+    to_agent:     str
+
+    # What Agent-A is delegating to Agent-B
+    delegated_scope: List[str] = field(default_factory=list)
+
+    # What Agent-A explicitly retains (Agent-B must not touch)
+    retained_scope: List[str] = field(default_factory=list)
+
+    # Hard constraints Agent-B must honour
+    constraints: List[str] = field(default_factory=list)
+
+    # Conditions that trigger escalation to a human or third agent
+    escalation_rules: List[str] = field(default_factory=list)
+
+    agreed_at: datetime = field(default_factory=datetime.now)
+    status: str = "active"   # active | expired | violated
+
+    def to_dict(self) -> Dict:
+        return {
+            "agreement_id":   self.agreement_id,
+            "from_agent":     self.from_agent,
+            "to_agent":       self.to_agent,
+            "delegated_scope":  self.delegated_scope,
+            "retained_scope":   self.retained_scope,
+            "constraints":      self.constraints,
+            "escalation_rules": self.escalation_rules,
+            "agreed_at":        self.agreed_at.isoformat(),
+            "status":           self.status,
+        }
+
+
 class PolicyAlignmentManager:
     """
     Manages policy decisions across agents with epistemic awareness.
@@ -97,6 +142,76 @@ class PolicyAlignmentManager:
         self.constraints: Dict[str, PolicyConstraint] = {}
         self.decision_history: List[PolicyDecision] = []
         self.conflict_resolutions: List[Dict] = []
+        self._agreements: Dict[str, PolicyAgreement] = {}
+
+    # ── pre-handoff agreement ─────────────────────────────────────────────────
+
+    def agree(
+        self,
+        from_agent:       str,
+        to_agent:         str,
+        delegated_scope:  List[str],
+        retained_scope:   List[str],
+        constraints:      List[str],
+        escalation_rules: List[str],
+    ) -> PolicyAgreement:
+        """
+        Negotiate and record a scope agreement between two agents.
+
+        Returns a PolicyAgreement that should be embedded in the
+        StateTransfer packet so Agent-B is bound from the moment
+        it receives the handoff.
+        """
+        agreement = PolicyAgreement(
+            agreement_id    = f"pol-{uuid.uuid4().hex[:12]}",
+            from_agent      = from_agent,
+            to_agent        = to_agent,
+            delegated_scope = delegated_scope,
+            retained_scope  = retained_scope,
+            constraints     = constraints,
+            escalation_rules= escalation_rules,
+        )
+        self._agreements[agreement.agreement_id] = agreement
+        logger.info("PolicyAgreement %s: %s → %s", agreement.agreement_id, from_agent, to_agent)
+        return agreement
+
+    def check_handoff(
+        self,
+        from_agent: str,
+        to_agent:   str,
+        task:       str,
+    ) -> Tuple[bool, str]:
+        """
+        Gate a proposed handoff: is it covered by an active agreement?
+
+        Returns (allowed: bool, reason: str).
+        """
+        active = [
+            a for a in self._agreements.values()
+            if a.from_agent == from_agent
+            and a.to_agent  == to_agent
+            and a.status    == "active"
+        ]
+        if not active:
+            return False, f"No active policy agreement between {from_agent} and {to_agent}"
+
+        agreement = active[-1]
+        task_lower = task.lower()
+
+        # Check against retained scope — these stay with Agent-A
+        for retained in agreement.retained_scope:
+            if retained.lower() in task_lower:
+                return False, f"Task touches retained scope '{retained}' — Agent-A handles this"
+
+        # Check constraints
+        for constraint in agreement.constraints:
+            if constraint.lower() in task_lower:
+                return False, f"Policy constraint blocks task: '{constraint}'"
+
+        return True, f"Handoff permitted under agreement {agreement.agreement_id}"
+
+    def get_agreement(self, agreement_id: str) -> Optional[PolicyAgreement]:
+        return self._agreements.get(agreement_id)
     
     def add_constraint(self, constraint: PolicyConstraint):
         """Add a policy constraint that must be satisfied"""

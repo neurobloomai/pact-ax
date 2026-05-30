@@ -368,13 +368,53 @@ def run(dry_run: bool = False) -> None:
     print(f"  Agent-A → Agent-B trust:  {trust_before['base_trust']:.3f}")
     print(f"  Recommendation:           {trust_before['recommendation']}")
 
+    # ── 4.5. PolicyAlign — negotiate scope before the handoff ────────────────
+    _banner("Step 4.5 · PolicyAlign — negotiate handoff scope")
+
+    agreement = _pax("post", "/policy/agree", json={
+        "from_agent":      "agent-A",
+        "to_agent":        "agent-B",
+        "delegated_scope": [
+            "compensation_analysis",
+            "equity_valuation",
+            "non_compete_review",
+        ],
+        "retained_scope": [
+            "emotional_support",
+            "career_counseling",
+            "long_term_career_strategy",
+        ],
+        "constraints": [
+            "no_final_legal_advice",
+            "no_contacting_employers",
+            "no_making_the_decision_for_marcus",
+        ],
+        "escalation_rules": [
+            "if non-compete is potentially enforceable → escalate to employment lawyer",
+            "if Marcus expresses distress → return to Agent-A",
+        ],
+    })
+    aid = agreement["agreement_id"]
+    print(f"  Agreement:  {aid}")
+    print(f"  Delegated:  {', '.join(agreement['delegated_scope'])}")
+    print(f"  Retained:   {', '.join(agreement['retained_scope'])}")
+    print(f"  Escalation: {agreement['escalation_rules'][0]}")
+
+    gate = _pax("post", "/policy/gate", json={
+        "from_agent": "agent-A",
+        "to_agent":   "agent-B",
+        "task":       "compensation_analysis non_compete_review",
+    })
+    print(f"\n  Gate check: {'✓ allowed' if gate['allowed'] else '✗ blocked'}  — {gate['reason']}")
+
     # ── 5. StateTransfer — prepare the handoff packet ────────────────────────
     _banner("Step 5 · StateTransfer — prepare handoff packet")
 
     transfer_payload = {
         **OFFER_STATE,
-        "story_context":  story_context,
-        "memory_context": memory_context,
+        "story_context":   story_context,
+        "memory_context":  memory_context,
+        "policy_agreement": aid,
     }
 
     prep = _pax("post", "/transfer/prepare", json={
@@ -460,11 +500,12 @@ def run(dry_run: bool = False) -> None:
     print(f"  Next handoff to Agent-B will be gated at this updated score.")
 
     # ── summary ───────────────────────────────────────────────────────────────
-    _banner("Summary — four primitives + pact-hx, one seam")
+    _banner("Summary — five primitives + pact-hx, one seam")
     print(f"  StoryKeeper   ✓  3-month narrative survived the handoff")
-    print(f"  StateTransfer ✓  offer terms transferred cleanly  (packet {pid[:12]}...)")
+    print(f"  StateTransfer ✓  offer terms + story + memory + policy transferred  (packet {pid[:12]}...)")
     print(f"  ContextShare  ✓  Agent-B received role-relevant context, not everything")
     print(f"  Trust         ✓  gated at {trust_before['base_trust']:.3f}  →  {trust_after['base_trust']:.3f} after outcome")
+    print(f"  PolicyAlign   ✓  scope negotiated ({aid})  — Agent-B bound by agreed constraints")
     print(f"  pact-hx       ✓  {mem_summary['total_memories']} episodic memories → identity + semantic enriched handoff")
     print()
     print(f"  The progression:")

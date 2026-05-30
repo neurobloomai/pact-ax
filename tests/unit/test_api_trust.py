@@ -14,7 +14,9 @@ client = TestClient(app, raise_server_exceptions=True)
 
 
 @pytest.fixture(autouse=True)
-def clear_registry():
+def clear_registry(tmp_path):
+    # Point the trust route at a fresh per-test DB so persistent load never bleeds
+    trust_module._TRUST_DB = str(tmp_path / "trust.db")
     trust_module._managers.clear()
     yield
     trust_module._managers.clear()

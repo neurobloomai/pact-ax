@@ -11,6 +11,7 @@ from typing import List, Dict, Optional, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pact_ax.storage.story_store import StoryStore
+    from pact_ax.integration.hx_bridge import HXBridge
 
 
 class StoryArc(Enum):
@@ -48,6 +49,7 @@ class StoryKeeper:
         session_id: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         db_path: Optional[str] = None,
+        hx_bridge: Optional["HXBridge"] = None,
     ):
         self.agent_id = agent_id
         self.session_id = session_id
@@ -62,6 +64,8 @@ class StoryKeeper:
             from pact_ax.storage.story_store import StoryStore
             self._store = StoryStore(db_path=db_path)
             self._store.save_keeper(self)
+
+        self._hx_bridge: Optional["HXBridge"] = hx_bridge
 
     # ------------------------------------------------------------------
     # Persistence
@@ -96,6 +100,7 @@ class StoryKeeper:
             for t in data["arc_history"]
         ]
         keeper.story_state = data["story_state"] or keeper._initial_story_state()
+        keeper._hx_bridge = None
         return keeper
 
     # ------------------------------------------------------------------
@@ -129,6 +134,8 @@ class StoryKeeper:
         if self._store:
             self._store.save_interaction(self.agent_id, interaction)
             self._store.save_keeper(self)
+        if self._hx_bridge:
+            self._hx_bridge.on_interaction(self.agent_id, interaction)
         return self.story_state["last_beat"]
 
     def process_interaction(
@@ -160,6 +167,8 @@ class StoryKeeper:
         if self._store:
             self._store.save_interaction(self.agent_id, interaction)
             self._store.save_keeper(self)
+        if self._hx_bridge:
+            self._hx_bridge.on_interaction(self.agent_id, interaction)
         return interaction
 
     def get_story_state(self) -> Dict[str, Any]:
@@ -213,6 +222,19 @@ class StoryKeeper:
         else:
             relevant = self.interactions[-k:]
         return relevant
+
+    def get_enriched_context(self) -> Dict[str, Any]:
+        """
+        Return story context enriched with pact-hx memory when a bridge is attached.
+
+        Without HXBridge: returns story state only.
+        With HXBridge: adds identity traits, semantic patterns, and recent emotional
+        trend from pact-hx — the full picture of who this person is.
+        """
+        ctx: Dict[str, Any] = {"story": self.get_story_state()}
+        if self._hx_bridge:
+            ctx["memory"] = self._hx_bridge.enrich_handoff_context()
+        return ctx
 
     def get_story_summary(self) -> Dict[str, Any]:
         """Return a summary of the current story state."""
@@ -372,3 +394,5 @@ class StoryKeeper:
         self.arc_history.append(transition)
         if self._store:
             self._store.save_arc_transition(self.agent_id, transition)
+        if self._hx_bridge:
+            self._hx_bridge.on_arc_transition(self.agent_id, from_arc, to_arc)

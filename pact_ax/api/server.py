@@ -31,6 +31,10 @@ from pact_ax.api.routes.story_keeper import router as story_router
 from pact_ax.api.routes.seam_observer import router as seam_router
 from pact_ax.api.routes.capabilities import router as capabilities_router
 from pact_ax.api.routes.orchestrate import router as orchestrate_router
+from pact_ax.api.routes.agent_router import router as agent_router_router
+from pact_ax.api.routes.consensus import router as consensus_router
+from pact_ax.api.routes.dead_letter import router as dlq_router
+from pact_ax.api.routes.episodic_memory import router as memory_router
 
 # Shared access-layer singletons — same instances used by middleware and routes
 _key_store = KeyStore(db_path="access.db")
@@ -68,6 +72,10 @@ app.include_router(story_router)
 app.include_router(seam_router)
 app.include_router(capabilities_router)
 app.include_router(orchestrate_router)
+app.include_router(agent_router_router)
+app.include_router(consensus_router)
+app.include_router(dlq_router)
+app.include_router(memory_router)
 
 
 @app.get("/health", tags=["meta"], summary="Health check")

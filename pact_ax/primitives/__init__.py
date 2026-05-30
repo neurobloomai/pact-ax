@@ -9,6 +9,9 @@ from pact_ax.state import StateTransferManager, HandoffReason, HandoffPacket, Tr
 from .context_share import ContextShareManager, ContextType, TrustLevel, Priority
 from .trust_score import TrustManager
 from .capability_registry import CapabilityRegistry, Capability
+from .agent_router import AgentRouter, RouteDecision, RouteCandidate
+from .dead_letter_queue import DeadLetterQueue, DLQEntry, DLQStatus
+from .episodic_memory import EpisodicMemory, Episode
 
 __all__ = [
     # Narrative continuity
@@ -29,4 +32,15 @@ __all__ = [
     # Capability discovery
     "CapabilityRegistry",
     "Capability",
+    # Trust-weighted routing
+    "AgentRouter",
+    "RouteDecision",
+    "RouteCandidate",
+    # Dead Letter Queue
+    "DeadLetterQueue",
+    "DLQEntry",
+    "DLQStatus",
+    # Episodic memory
+    "EpisodicMemory",
+    "Episode",
 ]

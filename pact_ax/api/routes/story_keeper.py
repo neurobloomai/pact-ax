@@ -8,21 +8,31 @@ registry. Sessions are scoped within an agent — one agent can carry multiple
 named sessions (story threads) by passing session_id on registration.
 """
 
+import os
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from pact_ax.primitives.story_keeper import StoryKeeper, StoryArc
+from pact_ax.storage.story_store import StoryStore
 
 router = APIRouter(prefix="/story", tags=["story-keeper"])
 
-# ── In-memory registry ────────────────────────────────────────────────────────
+_STORY_DB = os.getenv("PACT_STORY_DB", "story_keeper.db")
+
+# In-process cache — keepers restored from DB live here too
 _keepers: Dict[str, StoryKeeper] = {}
+_store = StoryStore(db_path=_STORY_DB)
 
 
 def _get_keeper(agent_id: str) -> StoryKeeper:
     if agent_id not in _keepers:
-        _keepers[agent_id] = StoryKeeper(agent_id=agent_id)
+        # Try to restore from DB before creating fresh
+        restored = StoryKeeper.load(agent_id, db_path=_STORY_DB)
+        if restored is not None:
+            _keepers[agent_id] = restored
+        else:
+            _keepers[agent_id] = StoryKeeper(agent_id=agent_id, db_path=_STORY_DB)
     return _keepers[agent_id]
 
 
@@ -80,6 +90,7 @@ def register(req: RegisterRequest) -> Dict[str, Any]:
         agent_id=req.agent_id,
         session_id=req.session_id,
         config=req.config,
+        db_path=_STORY_DB,
     )
     return {
         "registered": True,

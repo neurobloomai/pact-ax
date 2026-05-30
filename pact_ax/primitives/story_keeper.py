@@ -7,7 +7,10 @@ Because consciousness organizes itself through stories, not states.
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pact_ax.storage.story_store import StoryStore
 
 
 class StoryArc(Enum):
@@ -43,7 +46,8 @@ class StoryKeeper:
         self,
         agent_id: str,
         session_id: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        db_path: Optional[str] = None,
     ):
         self.agent_id = agent_id
         self.session_id = session_id
@@ -52,6 +56,47 @@ class StoryKeeper:
         self.current_arc = StoryArc.EXPLORATION
         self.arc_history: List[Dict[str, Any]] = []
         self.story_state: Dict[str, Any] = self._initial_story_state()
+
+        self._store: Optional["StoryStore"] = None
+        if db_path is not None:
+            from pact_ax.storage.story_store import StoryStore
+            self._store = StoryStore(db_path=db_path)
+            self._store.save_keeper(self)
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def load(cls, agent_id: str, db_path: str) -> Optional["StoryKeeper"]:
+        """Restore a StoryKeeper from SQLite. Returns None if agent_id is unknown."""
+        from pact_ax.storage.story_store import StoryStore
+        store = StoryStore(db_path=db_path)
+        data = store.load_keeper_data(agent_id)
+        if data is None:
+            return None
+
+        keeper = cls.__new__(cls)
+        keeper.agent_id   = data["agent_id"]
+        keeper.session_id = data["session_id"]
+        keeper.config     = {}
+        keeper._store     = store
+        keeper.current_arc = StoryArc(data["current_arc"])
+
+        keeper.interactions = [
+            {**ix, "arc": StoryArc(ix["arc"])} for ix in data["interactions"]
+        ]
+        keeper.arc_history = [
+            {
+                "from":              StoryArc(t["from"]),
+                "to":                StoryArc(t["to"]),
+                "at":                t["at"],
+                "interaction_count": t["interaction_count"],
+            }
+            for t in data["arc_history"]
+        ]
+        keeper.story_state = data["story_state"] or keeper._initial_story_state()
+        return keeper
 
     # ------------------------------------------------------------------
     # Public API
@@ -81,6 +126,9 @@ class StoryKeeper:
             self.current_arc = new_arc
 
         self._update_story_state(user_message)
+        if self._store:
+            self._store.save_interaction(self.agent_id, interaction)
+            self._store.save_keeper(self)
         return self.story_state["last_beat"]
 
     def process_interaction(
@@ -109,6 +157,9 @@ class StoryKeeper:
             self.current_arc = new_arc
 
         self._update_story_state(user_input)
+        if self._store:
+            self._store.save_interaction(self.agent_id, interaction)
+            self._store.save_keeper(self)
         return interaction
 
     def get_story_state(self) -> Dict[str, Any]:
@@ -118,6 +169,8 @@ class StoryKeeper:
     def load_story_state(self, state: Dict[str, Any]) -> None:
         """Replace the current story state with a previously saved one."""
         self.story_state = state.copy()
+        if self._store:
+            self._store.save_keeper(self)
 
     def reset_story(self) -> None:
         """Reset all story state back to initial conditions."""
@@ -125,6 +178,9 @@ class StoryKeeper:
         self.current_arc = StoryArc.EXPLORATION
         self.arc_history = []
         self.story_state = self._initial_story_state()
+        if self._store:
+            self._store.delete_keeper(self.agent_id)
+            self._store.save_keeper(self)
 
     def recall_from_arc(
         self,
@@ -307,9 +363,12 @@ class StoryKeeper:
 
     def _record_arc_transition(self, from_arc: StoryArc, to_arc: StoryArc) -> None:
         """Record a story arc shift."""
-        self.arc_history.append({
+        transition = {
             "from": from_arc,
             "to": to_arc,
             "at": datetime.now(),
-            "interaction_count": len(self.interactions)
-        })
+            "interaction_count": len(self.interactions),
+        }
+        self.arc_history.append(transition)
+        if self._store:
+            self._store.save_arc_transition(self.agent_id, transition)

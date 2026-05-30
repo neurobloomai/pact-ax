@@ -210,3 +210,4 @@ __marimo__/
 node_modules/
 package-lock.json
 story_keeper_test/demo_history.db
+story_keeper.db*

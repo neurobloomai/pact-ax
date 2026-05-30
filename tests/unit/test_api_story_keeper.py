@@ -16,6 +16,8 @@ client = TestClient(app, raise_server_exceptions=True)
 @pytest.fixture(autouse=True)
 def clear_registry():
     sk_module._keepers.clear()
+    for agent_id in list(sk_module._store.list_agents()):
+        sk_module._store.delete_keeper(agent_id)
     yield
     sk_module._keepers.clear()
 

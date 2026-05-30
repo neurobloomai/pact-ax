@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from pact_ax.observability.event_bus import get_bus
+
 from pact_ax.coordination.policy_alignment import (
     PolicyAlignmentManager,
     PolicyAgreement,
@@ -251,7 +253,12 @@ def agree(req: AgreeRequest) -> Dict[str, Any]:
         constraints     = req.constraints,
         escalation_rules= req.escalation_rules,
     )
-    return agreement.to_dict()
+    d = agreement.to_dict()
+    get_bus().emit("policy_agreed",
+                   from_agent=req.from_agent, to_agent=req.to_agent,
+                   agreement_id=d["agreement_id"],
+                   delegated_scope=req.delegated_scope)
+    return d
 
 
 @router.post("/gate", summary="Gate a proposed handoff against active agreements")
@@ -265,6 +272,9 @@ def gate(req: GateRequest) -> Dict[str, Any]:
         to_agent   = req.to_agent,
         task       = req.task,
     )
+    get_bus().emit("policy_gated",
+                   from_agent=req.from_agent, to_agent=req.to_agent,
+                   task=req.task, allowed=allowed)
     return {"allowed": allowed, "reason": reason}
 
 

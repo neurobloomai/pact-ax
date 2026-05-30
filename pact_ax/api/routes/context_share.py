@@ -10,6 +10,8 @@ Managers are created on demand and held in a module-level in-memory registry
 
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
+
+from pact_ax.observability.event_bus import get_bus
 from pydantic import BaseModel, Field
 
 from pact_ax.primitives.context_share.manager import ContextShareManager
@@ -32,6 +34,7 @@ def _get_manager(agent_id: str) -> ContextShareManager:
 class RegisterAgentRequest(BaseModel):
     agent_id: str = Field(..., min_length=1)
     agent_type: str = Field("generic", min_length=1)
+    role: str = ""
     version: str = "1.0.0"
     capabilities: List[str] = []
     specializations: List[str] = []
@@ -93,6 +96,9 @@ def register_agent(req: RegisterAgentRequest) -> Dict[str, Any]:
         capabilities=req.capabilities,
         specializations=req.specializations,
     )
+    get_bus().emit("agent_registered",
+                   agent_id=req.agent_id, role=req.role or req.agent_type,
+                   capabilities=req.capabilities or [])
     return {"registered": True, "agent_id": req.agent_id}
 
 

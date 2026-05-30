@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from pact_ax.observability.event_bus import get_bus
 from pact_ax.primitives.trust_score import TrustManager
 from pact_ax.primitives.context_share.schemas import ContextType, CollaborationOutcome
 
@@ -108,11 +109,16 @@ def get_trust(
             raise HTTPException(status_code=422, detail=f"Unknown context_type: {context_type!r}")
 
     score = mgr.get_trust(target_id, ctx)
+    get_bus().emit("trust_read",
+                   from_agent=agent_id, to_agent=target_id,
+                   score=round(score, 4))
     return {
-        "agent_id":    agent_id,
-        "target_id":   target_id,
-        "score":       round(score, 4),
-        "context_type": context_type,
+        "agent_id":       agent_id,
+        "target_id":      target_id,
+        "score":          round(score, 4),
+        "trust_score":    round(score, 4),
+        "recommendation": "caution" if score < 0.6 else "proceed",
+        "context_type":   context_type,
     }
 
 
@@ -132,6 +138,9 @@ def update_trust(agent_id: str, req: UpdateTrustRequest) -> Dict[str, Any]:
         context_type=ctx_type,
         impact=req.impact,
     )
+    get_bus().emit("trust_updated",
+                   from_agent=agent_id, to_agent=req.target_id,
+                   new_score=round(new_score, 4), outcome=req.outcome)
     return {
         "agent_id":    agent_id,
         "target_id":   req.target_id,

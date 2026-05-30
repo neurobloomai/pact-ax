@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from pact_ax.observability.event_bus import get_bus
 from pact_ax.state.state_transfer_manager import (
     StateTransferManager,
     HandoffPacket,
@@ -84,6 +85,9 @@ def prepare_handoff(req: PrepareRequest) -> Dict[str, Any]:
         reason=reason,
         context=req.context,
     )
+    get_bus().emit("packet_prepared",
+                   from_agent=req.from_agent_id, to_agent=req.to_agent_id,
+                   packet_id=packet_id, reason=req.reason)
     return {
         "packet_id": packet_id,
         "from_agent": req.from_agent_id,
@@ -103,7 +107,11 @@ def send_packet(req: SendRequest) -> Dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
-    return packet.to_dict()
+    d = packet.to_dict()
+    get_bus().emit("packet_sent",
+                   from_agent=d.get("from_agent_id", ""), to_agent=d.get("to_agent_id", ""),
+                   packet_id=req.packet_id)
+    return d
 
 
 @router.post("/receive", summary="Receive and integrate a handoff packet")
@@ -117,6 +125,10 @@ def receive_packet(req: ReceiveRequest) -> Dict[str, Any]:
     mgr = _get_manager(req.agent_id)
     result = mgr.receive(packet)
 
+    fa = req.packet.get("from_agent_id", "") if isinstance(req.packet, dict) else ""
+    get_bus().emit("packet_received",
+                   from_agent=fa, to_agent=req.agent_id,
+                   packet_id=result.packet_id, success=result.success)
     return {
         "success":          result.success,
         "packet_id":        result.packet_id,

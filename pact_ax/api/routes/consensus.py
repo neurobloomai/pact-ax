@@ -48,7 +48,7 @@ class RunRoundRequest(BaseModel):
     round_id:    Optional[str] = Field(None)
     strategy:    str           = Field("weighted_vote",
                                        description="weighted_vote | quorum | unanimous | confidence_threshold")
-    votes:       List[VoteRequest] = Field(..., min_items=1)
+    votes:       List[VoteRequest] = Field(..., min_length=1)
     trust_scores: Dict[str, float] = Field(
         default_factory=dict,
         description="Optional {agent_id: trust_score} weights. Defaults to 1.0 for all agents."
@@ -71,7 +71,7 @@ class CreateSessionRequest(BaseModel):
 
 class SessionVoteRequest(BaseModel):
     round_id:     Optional[str]        = None
-    votes:        List[VoteRequest]    = Field(..., min_items=1)
+    votes:        List[VoteRequest]    = Field(..., min_length=1)
     trust_scores: Dict[str, float]     = Field(default_factory=dict)
     metadata:     Dict[str, Any]       = Field(default_factory=dict)
 

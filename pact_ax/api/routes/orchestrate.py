@@ -71,7 +71,7 @@ class TaskRequest(BaseModel):
 
 class ParallelRequest(BaseModel):
     from_agent: str = Field(..., min_length=1)
-    tasks:      List[TaskRequest] = Field(..., min_items=1)
+    tasks:      List[TaskRequest] = Field(..., min_length=1)
 
 
 class ConditionalRequest(BaseModel):
@@ -91,7 +91,7 @@ class ConditionalRequest(BaseModel):
 
 class RaceRequest(BaseModel):
     from_agent:   str = Field(..., min_length=1)
-    tasks:        List[TaskRequest] = Field(..., min_items=1)
+    tasks:        List[TaskRequest] = Field(..., min_length=1)
     stop_keyword: str = Field(
         "",
         description="Cancel remaining tasks when any result contains this keyword (case-insensitive). "

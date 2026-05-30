@@ -41,6 +41,7 @@ os.environ.setdefault("PACT_ENFORCE_AUTH", "0")
 from starlette.testclient import TestClient
 from pact_ax.api.server import app
 from pact_ax.primitives.story_keeper import StoryKeeper
+from pact_ax.integration.hx_bridge import HXBridge
 
 pax = TestClient(app, raise_server_exceptions=True)
 
@@ -169,6 +170,20 @@ DRY_B_WITH_STORY = (
     "it may trade the very autonomy you left your last job to find."
 )
 
+DRY_B_WITH_MEMORY = (
+    "Marcus, I have your full story and three months of memory context here, so "
+    "let me skip past the financial summary — you already know the numbers favour "
+    "the competing offer. What the memory tells me is that this decision keeps "
+    "surfacing the same tension: your partner's need for security vs. your need "
+    "for autonomy and meaning. That pattern doesn't resolve with a salary delta. "
+    "The non-compete is likely unenforceable, so the legal question is a distraction "
+    "— the real question is whether the bigger company preserves what you actually "
+    "left for. Autonomy in a 200-person org is different from autonomy at a Series B. "
+    "Before you decide, ask the $210k team one question: what does your first 90 days "
+    "look like, and who do you report to? That answer will tell you more than the "
+    "RSU difference."
+)
+
 
 # ── agent definitions ─────────────────────────────────────────────────────────
 
@@ -202,6 +217,15 @@ You are Agent-B, a compensation specialist. You have been given offer terms only
 Analyse them professionally. One paragraph, no JSON.
 """.strip()
 
+AGENT_B_WITH_MEMORY_SYSTEM = """
+You are Agent-B, a compensation specialist. You have been given the user's full
+story context AND their memory profile — recurring topics, emotional patterns,
+and identity signals built up over three months of interaction.
+
+Use both. Respond to who they are and what this decision actually costs them,
+not just what the numbers say. One paragraph, no JSON.
+""".strip()
+
 
 def agent_a_decide(dry_run: bool) -> Dict[str, Any]:
     if dry_run:
@@ -229,10 +253,15 @@ def run(dry_run: bool = False) -> None:
     print(f"\n  User:    Marcus — career pivot, 3 months in")
     print(f"  Crisis:  Competing offer + non-compete + 48-hour deadline\n")
 
-    # ── 1. StoryKeeper — build the narrative ──────────────────────────────────
-    _banner("Step 1 · StoryKeeper — build 3 months of narrative")
+    # ── 1. StoryKeeper + pact-hx — build the narrative ───────────────────────
+    _banner("Step 1 · StoryKeeper + pact-hx — build 3 months of narrative")
 
-    story = StoryKeeper(agent_id="agent-A", session_id="marcus-career-pivot")
+    bridge = HXBridge.for_agent("marcus")
+    story  = StoryKeeper(
+        agent_id="agent-A",
+        session_id="marcus-career-pivot",
+        hx_bridge=bridge,
+    )
 
     for i, (user_msg, agent_msg) in enumerate(PRIOR_TURNS, 1):
         story.process_interaction(
@@ -257,6 +286,16 @@ def run(dry_run: bool = False) -> None:
     print(f"  Themes:       {', '.join(themes[:8]) if themes else 'building...'}")
     print(f"  Last beat:    {state.get('last_beat', '')[:72]}")
 
+    # pact-hx memory stats
+    mem_summary = bridge.get_memory_summary()
+    hx_context  = bridge.enrich_handoff_context()
+    recent_topics = hx_context["recent"].get("recent_topics", [])
+    emotional_trend = hx_context["recent"].get("emotional_trend", "—")
+    print(f"\n  pact-hx memory:")
+    print(f"    Episodic stored:  {mem_summary['total_memories']}")
+    print(f"    Recent topics:    {', '.join(recent_topics[:6]) if recent_topics else 'building...'}")
+    print(f"    Emotional trend:  {emotional_trend}")
+
     # The narrative distillation that travels with the handoff
     story_context = (
         f"Arc: {summary['current_arc']} — {summary['total_interactions']} interactions over 3 months. "
@@ -264,6 +303,14 @@ def run(dry_run: bool = False) -> None:
         f"Narrative: Left stable job to pursue meaningful work. Partner's skepticism was real and acknowledged. "
         f"Autonomy and meaning matter more than compensation — but family stability is non-negotiable. "
         f"Crisis arrives 3 months in, just as they'd settled into the decision."
+    )
+
+    memory_context = (
+        f"Memory profile (pact-hx): "
+        f"{mem_summary['total_memories']} episodic memories. "
+        f"Recurring topics: {', '.join(recent_topics[:5]) if recent_topics else 'building'}. "
+        f"Emotional trend: {emotional_trend}. "
+        f"Identity signals: autonomy-seeker, family-anchor, meaning-over-money."
     )
 
     # ── 2. ContextShare — register agents ────────────────────────────────────
@@ -324,7 +371,11 @@ def run(dry_run: bool = False) -> None:
     # ── 5. StateTransfer — prepare the handoff packet ────────────────────────
     _banner("Step 5 · StateTransfer — prepare handoff packet")
 
-    transfer_payload = {**OFFER_STATE, "story_context": story_context}
+    transfer_payload = {
+        **OFFER_STATE,
+        "story_context":  story_context,
+        "memory_context": memory_context,
+    }
 
     prep = _pax("post", "/transfer/prepare", json={
         "from_agent_id": "agent-A",
@@ -342,28 +393,30 @@ def run(dry_run: bool = False) -> None:
     # ── 6. The seam ───────────────────────────────────────────────────────────
     _banner("Step 6 · The Seam — what Agent-B receives")
 
-    without_context = (
-        f"Task: compensation_negotiation\n"
-        f"Accepted offer:  $185k base + 10,000 RSUs (4yr/1yr cliff)\n"
-        f"Competing offer: $210k base + 15,000 RSUs (4yr/1yr cliff)\n"
-        f"Non-compete:     12 months, same industry\n"
-        f"Deadline:        48 hours"
-    )
-    with_context = without_context + f"\n\nStory context: {story_context}"
+    offer_lines = [
+        "Task: compensation_negotiation",
+        "Accepted offer:  $185k base + 10,000 RSUs (4yr/1yr cliff)",
+        "Competing offer: $210k base + 15,000 RSUs (4yr/1yr cliff)",
+        "Non-compete:     12 months, same industry",
+        "Deadline:        48 hours",
+    ]
+    without_context  = "\n".join(offer_lines)
+    with_context     = without_context + f"\n\nStory context: {story_context}"
+    enriched_context = with_context + f"\n\n{memory_context}"
 
-    print(f"\n  ┌─ WITHOUT StoryKeeper {'─' * 43}┐")
-    for line in without_context.split("\n"):
-        print(f"  │  {line:<62}│")
-    print(f"  └{'─' * 65}┘")
+    def _box(title: str, extra_lines: list) -> None:
+        print(f"\n  ┌─ {title} {'─' * max(0, 61 - len(title))}┐")
+        for line in offer_lines:
+            print(f"  │  {line:<62}│")
+        for block in extra_lines:
+            print(f"  │  {'─' * 62}│")
+            for line in textwrap.wrap(block, 62):
+                print(f"  │  {line:<62}│")
+        print(f"  └{'─' * 65}┘")
 
-    print(f"\n  ┌─ WITH StoryKeeper (actual handoff) {'─' * 27}┐")
-    for line in without_context.split("\n"):
-        print(f"  │  {line:<62}│")
-    print(f"  │  {'─' * 62}│")
-    story_lines = textwrap.wrap(f"Story: {story_context}", 62)
-    for line in story_lines:
-        print(f"  │  {line:<62}│")
-    print(f"  └{'─' * 65}┘")
+    _box("WITHOUT StoryKeeper", [])
+    _box("WITH StoryKeeper", [f"Story: {story_context}"])
+    _box("WITH StoryKeeper + pact-hx", [f"Story: {story_context}", memory_context])
 
     # ── 7. Agent-B responds — the difference ─────────────────────────────────
     _banner("Step 7 · Agent-B responds — the difference")
@@ -374,11 +427,17 @@ def run(dry_run: bool = False) -> None:
     )
     _wrap(resp_without, indent=4)
 
-    print(f"\n  ▸ WITH story context (actual handoff):")
+    print(f"\n  ▸ WITH story context (StoryKeeper):")
     resp_with = agent_b_respond(
         with_context, AGENT_B_WITH_STORY_SYSTEM, dry_run, DRY_B_WITH_STORY
     )
     _wrap(resp_with, indent=4)
+
+    print(f"\n  ▸ WITH story + memory context (StoryKeeper + pact-hx):")
+    resp_enriched = agent_b_respond(
+        enriched_context, AGENT_B_WITH_MEMORY_SYSTEM, dry_run, DRY_B_WITH_MEMORY
+    )
+    _wrap(resp_enriched, indent=4)
 
     # ── 8. Trust evolution ────────────────────────────────────────────────────
     _banner("Step 8 · Trust — outcome recorded, network updates")
@@ -401,15 +460,17 @@ def run(dry_run: bool = False) -> None:
     print(f"  Next handoff to Agent-B will be gated at this updated score.")
 
     # ── summary ───────────────────────────────────────────────────────────────
-    _banner("Summary — four primitives, one seam")
+    _banner("Summary — four primitives + pact-hx, one seam")
     print(f"  StoryKeeper   ✓  3-month narrative survived the handoff")
     print(f"  StateTransfer ✓  offer terms transferred cleanly  (packet {pid[:12]}...)")
     print(f"  ContextShare  ✓  Agent-B received role-relevant context, not everything")
     print(f"  Trust         ✓  gated at {trust_before['base_trust']:.3f}  →  {trust_after['base_trust']:.3f} after outcome")
+    print(f"  pact-hx       ✓  {mem_summary['total_memories']} episodic memories → identity + semantic enriched handoff")
     print()
-    print(f"  The difference:")
-    print(f"  Without story → Agent-B saw an offer negotiation.")
-    print(f"  With story    → Agent-B saw Marcus.\n")
+    print(f"  The progression:")
+    print(f"  Without story           → Agent-B saw an offer negotiation.")
+    print(f"  With story              → Agent-B saw Marcus.")
+    print(f"  With story + pact-hx   → Agent-B saw the pattern Marcus can't see himself.\n")
 
 
 if __name__ == "__main__":

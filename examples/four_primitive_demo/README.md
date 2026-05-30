@@ -20,10 +20,13 @@ he didn't fully read. Agent-A hits its capability limit. Handoff to Agent-B
 
 ## The core moment
 
-Step 6 shows Agent-B's context **WITH** and **WITHOUT** StoryKeeper side by side.
-Step 7 shows how Agent-B responds differently.
+Step 6 shows Agent-B's context three ways — without story, with story, with story + pact-hx memory.
+Step 7 shows how Agent-B responds differently at each level.
 
-That difference is what PACT-AX is for.
+The progression:
+- Without story → Agent-B saw an offer negotiation.
+- With story → Agent-B saw Marcus.
+- With story + pact-hx → Agent-B saw the pattern Marcus can't see himself.
 
 ## Run
 

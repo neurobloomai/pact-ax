@@ -15,6 +15,7 @@ These two together let external systems propagate and consume trust without
 sharing implementation details.
 """
 
+import os
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -25,13 +26,15 @@ from pact_ax.primitives.context_share.schemas import ContextType, CollaborationO
 
 router = APIRouter(prefix="/trust", tags=["trust"])
 
+_TRUST_DB = os.getenv("PACT_TRUST_DB", "trust.db")
+
 # ── In-memory registry ────────────────────────────────────────────────────────
 _managers: Dict[str, TrustManager] = {}
 
 
 def _get_manager(agent_id: str) -> TrustManager:
     if agent_id not in _managers:
-        _managers[agent_id] = TrustManager(agent_id=agent_id)
+        _managers[agent_id] = TrustManager.load(_TRUST_DB, agent_id=agent_id)
     return _managers[agent_id]
 
 
@@ -138,6 +141,7 @@ def update_trust(agent_id: str, req: UpdateTrustRequest) -> Dict[str, Any]:
         context_type=ctx_type,
         impact=req.impact,
     )
+    mgr.save(_TRUST_DB)
     get_bus().emit("trust_updated",
                    from_agent=agent_id, to_agent=req.target_id,
                    new_score=round(new_score, 4), outcome=req.outcome)
@@ -190,6 +194,7 @@ def register_external_trust(agent_id: str, req: ExternalTrustRequest) -> Dict[st
         target_agent=req.target_agent,
         score=req.score,
     )
+    mgr.save(_TRUST_DB)
     return {
         "recorded":     True,
         "agent_id":     agent_id,
@@ -219,4 +224,5 @@ def reset_trust(agent_id: str, target_id: str) -> Dict[str, Any]:
     """Remove all trust history for target_id from this agent's TrustManager."""
     mgr = _get_manager(agent_id)
     mgr.reset_trust(target_id)
+    mgr.save(_TRUST_DB)
     return {"reset": True, "agent_id": agent_id, "target_id": target_id}

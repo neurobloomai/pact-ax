@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,12 +7,11 @@ name = "pact-ax"
 version = "0.1.0"
 description = "PACT Agent Collaboration Layer - Multi-Agent Coordination Protocol"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 authors = [{name = "NeuroBloom.ai", email = "hello@neurobloom.ai"}]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
@@ -26,9 +25,8 @@ dependencies = [
     "uvicorn>=0.20.0",
     "httpx>=0.24.0",
     "cryptography>=41.0.0",
-    "redis>=4.5.0",
-    "asyncio-mqtt>=0.13.0",
     "python-multipart>=0.0.6",
+    "anthropic>=0.40.0",
 ]
 
 [project.optional-dependencies]
@@ -43,9 +41,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/neurobloom/pact-ax"
-Repository = "https://github.com/neurobloom/pact-ax"
-Documentation = "https://docs.neurobloom.ai/pact-ax"
+Homepage = "https://github.com/neurobloomai/pact-ax"
+Repository = "https://github.com/neurobloomai/pact-ax"
+SDK = "https://github.com/neurobloomai/pact-ax-client"
 
 [tool.setuptools.packages.find]
 where = ["."]

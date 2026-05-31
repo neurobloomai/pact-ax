@@ -4,7 +4,32 @@
 ![neurobloom.ai](https://img.shields.io/badge/neurobloom.ai-collaborative--intelligence-blue)
 ![MIT License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-active--development-orange)
-![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-743%20passing-brightgreen)
+![PyPI](https://img.shields.io/pypi/v/pact-ax-client?label=pact-ax-client)
+
+---
+
+## Use the SDK
+
+The fastest way to build on PACT-AX is the Python SDK — no server wiring required for your first experiment:
+
+```bash
+pip install pact-ax-client
+```
+
+```python
+from pact_ax_client import Agent
+
+agent = Agent("my-agent", base_url="http://localhost:8000")
+agent.register_capability("contract_review", description="Reviews NDAs")
+
+decision = agent.route("contract_review")
+if decision.routed:
+    result = agent.handoff(decision.best_agent, state_data={"doc": "..."})
+    agent.remember("contract_review", partner_id=decision.best_agent, outcome="positive")
+```
+
+→ Full SDK docs: [neurobloomai/pact-ax-client](https://github.com/neurobloomai/pact-ax-client)
 
 ---
 
@@ -26,320 +51,233 @@ PACT-AX integrates human collaboration wisdom with AI technical capabilities:
 
 ## Architecture
 
-### PACT Protocol Layers
-
 ```
 neurobloom.ai Ecosystem
-├── PACT-HX (Human Experience Layer)     [Planned]
-│   ├── Collaborative improvisation frameworks
-│   ├── Universal translator for human "operating systems"
-│   ├── Designed serendipity with neural rewiring/unwiring
-│   └── Leadership multiplication protocols
+├── PACT-HX (Human Experience Layer)
+│   └── Personalized memory, emotional context, adaptive communication
 │
-└── PACT-AX (Agent Communication Layer)  [This Repository]
+└── PACT-AX (Agent Collaboration Layer)  [This Repository]
     ├── pact_ax.primitives
     │   ├── StoryKeeper          — narrative continuity across turns
     │   ├── ContextShareManager  — trust-aware context exchange
-    │   └── TrustManager         — network-wide trust scoring
+    │   ├── TrustManager         — network-wide trust scoring (persistent SQLite)
+    │   ├── CapabilityRegistry   — agent skill registration and discovery
+    │   └── AgentRouter          — trust-weighted task routing
     ├── pact_ax.state
-    │   ├── StateTransferManager — full handoff lifecycle protocol
+    │   ├── StateTransferManager — full handoff lifecycle (prepare → send → receive)
     │   └── EpistemicStateTransfer — knowledge + confidence fidelity
-    └── pact_ax.coordination
-        ├── ConsensusProtocol    — multi-agent decision making
-        └── CoordinationBus      — event-driven agent messaging
+    ├── pact_ax.coordination
+    │   ├── ConsensusProtocol    — weighted-vote multi-agent decisions
+    │   └── CoordinationBus      — event-driven agent messaging
+    └── pact_ax.api              — 84-route REST API (FastAPI)
+        ├── /capabilities        — register, find, search, deregister skills
+        ├── /trust               — get, update, network trust, insights
+        ├── /route               — trust-weighted and capability-only routing
+        ├── /memory/episodes     — record and recall episodic memory
+        ├── /consensus           — stateless run + stateful sessions
+        ├── /dlq                 — dead letter queue with exponential backoff
+        └── /transfer            — prepare, send, receive, checkpoint
 ```
 
 ---
 
 ## Key Features
 
+### 🗺️ Capability Registry + Router
+
+Register agent skills and route tasks to the best trusted+capable agent:
+
+```python
+from pact_ax.primitives import CapabilityRegistry, AgentRouter
+
+registry = CapabilityRegistry()
+registry.register("agent-a", "contract_review", tags=["legal"])
+registry.register("agent-b", "contract_review", tags=["legal"])
+registry.register("agent-b", "tax_analysis",   tags=["finance"])
+
+router = AgentRouter(capability_db=":memory:", trust_db=":memory:")
+decision = router.route(from_agent="orch", skill="contract_review", min_trust=0.6)
+print(decision.best_agent, decision.strategy_used)
+# "agent-b"  "trust_weighted"
+```
+
 ### 📖 Story Keeper
-Maintains narrative continuity across conversation turns so agents don't lose context between sessions.
+
+Maintains narrative continuity across conversation turns:
 
 ```python
 from pact_ax.primitives import StoryKeeper
 
 keeper = StoryKeeper(agent_id="agent-001", session_id="user-session-42")
-
-# Process turns — story state evolves automatically
 keeper.process_turn("I want to build a startup in the health space")
 keeper.process_turn("What should I focus on first?")
 
-# Snapshot the story for handoff or persistence
 story = keeper.get_story_state()
-# {"characters": {...}, "arc": "Collaboration: startup, health",
-#  "themes": ["startup", "health", "focus"], "context": "...", "last_beat": "..."}
-
-# Restore in a new session
-new_keeper = StoryKeeper(agent_id="agent-001", session_id="user-session-42")
-new_keeper.load_story_state(story)
-
-# Reset when starting fresh
-keeper.reset_story()
+# {"arc": "Collaboration: startup, health", "themes": [...], ...}
 ```
 
----
-
 ### 🤝 Context Sharing
-Trust-aware context exchange with validated packets, lineage tracking, and capability sensing.
+
+Trust-aware context exchange with validated packets:
 
 ```python
 from pact_ax.primitives import ContextShareManager, ContextType, Priority
 
-manager = ContextShareManager(
-    agent_id="agent-001",
-    agent_type="support_specialist",
-    capabilities=["nlp", "customer_support"],
-)
-
-# Create a validated context packet
+manager = ContextShareManager("agent-001", agent_type="support_specialist",
+                               capabilities=["nlp", "customer_support"])
 packet = manager.create_context_packet(
     target_agent="agent-002",
     context_type=ContextType.TASK_KNOWLEDGE,
-    payload={
-        "current_task": "customer_support",
-        "priority": "high",
-        "context": "User needs help with billing issue",
-    },
+    payload={"current_task": "customer_support", "context": "billing issue"},
     priority=Priority.HIGH,
 )
-
-# Assess trust before sharing sensitive context
-trust = manager.assess_trust(
-    target_agent="agent-002",
-    context_type=ContextType.EMOTIONAL_STATE,
-    current_situation={"stakes": "high"},
-)
-# {"final_trust": 0.62, "recommendation": "caution", ...}
-
-# Sense capability limits for proactive handoff
-status = manager.sense_capability_limit("billing_resolution", confidence_threshold=0.7)
-# {"approaching_limit": True, "recommendation": "prepare_handoff", ...}
-
-# Record outcomes to evolve trust over time
-manager.record_collaboration_outcome("agent-002", ContextType.TASK_KNOWLEDGE, "positive")
 ```
 
----
-
 ### 🔄 State Transfer
-Full handoff lifecycle — prepare, send, receive, integrate, rollback — with story awareness and epistemic state fidelity.
+
+Full handoff lifecycle — prepare, send, receive, checkpoint:
 
 ```python
 from pact_ax.state import StateTransferManager, HandoffReason
-from pact_ax.primitives import StoryKeeper
 
-# Sender side
-story_keeper = StoryKeeper("agent-A")
-sender = StateTransferManager(agent_id="agent-A", story_keeper=story_keeper)
-
-packet_id = sender.prepare(
-    to_agent_id="agent-B",
-    state_data={"task": "analyse Q3 revenue", "progress": 0.6},
-    reason=HandoffReason.CONTINUATION,
-    context={"priority": "high"},
-)
+sender = StateTransferManager(agent_id="agent-A")
+packet_id = sender.prepare("agent-B", state_data={"task": "analyse Q3"}, reason=HandoffReason.CONTINUATION)
 packet = sender.send(packet_id)
 
-# Receiver side
 receiver = StateTransferManager(agent_id="agent-B")
 result = receiver.receive(packet)
-
-if result.success:
-    print(result.integrated_state)  # full state + narrative + epistemic context
-
-# Checkpoint before risky operations
-ckpt_id = sender.checkpoint(label="before_v2_deploy", state_data=current_state)
-sender.restore(ckpt_id)  # roll back if needed
+print(result.success, result.integrated_state)
 ```
-
-**Convenience wrapper** (single-call API for simpler use cases):
-
-```python
-# prepare_handoff / receive_handoff wrap the full lifecycle
-transfer = sender.prepare_handoff(
-    target_agent="agent-B",
-    state_data={"task": "billing_resolution", "progress": 0.75},
-    handoff_reason="continuation",
-)
-confirmation = receiver.receive_handoff(transfer)
-# {"received": True, "story_integrated": True, "ready_to_continue": True, ...}
-```
-
----
 
 ### 🛡️ Trust Scoring
-Network-wide trust that evolves from real collaboration outcomes, decays with inactivity, and infers reputation transitively.
+
+Persistent, network-wide trust that evolves from real collaboration outcomes:
 
 ```python
 from pact_ax.primitives import TrustManager
-from pact_ax.primitives.context_share import CollaborationOutcome, ContextType
 
 tm = TrustManager(agent_id="agent-001")
-
-# Record outcomes — trust evolves automatically
-tm.update_trust("agent-002", CollaborationOutcome.POSITIVE, ContextType.TASK_KNOWLEDGE)
-tm.record_outcome("agent-002", "negative", ContextType.HANDOFF_REQUEST)
-
-# Query scores
-score = tm.get_trust("agent-002")                                # overall
-score = tm.get_trust("agent-002", ContextType.TASK_KNOWLEDGE)   # context-specific
-
-# Decay inactive relationships toward neutral
-tm.decay_trust(days_inactive=7)
-
-# Network-level reputation (infers trust for unknown agents)
-inferred = tm.get_network_trust("agent-unknown")
-
-# Find your most trusted collaborators
-trusted = tm.get_trusted_agents(min_trust=0.7, context_type=ContextType.TASK_KNOWLEDGE)
-
-# Full insights across all relationships
-insights = tm.get_trust_insights()
+tm.update_trust("agent-002", "positive", "task_knowledge")
+score = tm.get_trust("agent-002")       # overall
+inferred = tm.get_network_trust("agent-unknown")   # transitive
+trusted = tm.get_trusted_agents(min_trust=0.7)
 ```
 
----
+### 🧠 Episodic Memory
+
+Record and recall past interactions with filters:
+
+```python
+from pact_ax.primitives import EpisodicMemory
+
+mem = EpisodicMemory()
+mem.record("agent-a", "reviewed_nda", partner_id="agent-b",
+           outcome="positive", importance=0.8, tags=["legal"])
+episodes = mem.recall("agent-a", outcome="positive", min_importance=0.5)
+summary  = mem.summary("agent-a")
+# {"total_episodes": 12, "avg_importance": 0.72, "outcome_breakdown": {...}}
+```
+
+### 📬 Dead Letter Queue
+
+Park failed deliveries for retry with exponential backoff:
+
+```python
+from pact_ax.primitives import DeadLetterQueue
+
+dlq = DeadLetterQueue(max_attempts=3, base_seconds=30)
+entry = dlq.enqueue("pkt-xyz", "agent-a", "agent-b", reason="timeout")
+dlq.retry(entry.id)   # next_retry = now + 30s, 60s, 120s...
+```
 
 ### 🗳️ Consensus Protocol
-Structured multi-agent decision making with pluggable strategies and deadlock detection.
+
+Weighted-vote multi-agent decisions:
 
 ```python
 from pact_ax.coordination.consensus import ConsensusProtocol, ConsensusStrategy, Vote
 
 proto = ConsensusProtocol(strategy=ConsensusStrategy.WEIGHTED_VOTE)
-
 votes = [
-    Vote("agent-A", "deploy-v2", confidence=0.85, reasoning="metrics look good"),
-    Vote("agent-B", "deploy-v2", confidence=0.80, reasoning="tests pass"),
-    Vote("agent-C", "hold",      confidence=0.65, reasoning="need more data"),
+    Vote("agent-A", "deploy-v2", confidence=0.85),
+    Vote("agent-B", "deploy-v2", confidence=0.80),
+    Vote("agent-C", "hold",      confidence=0.65),
 ]
-
 result = proto.run(votes, trust_scores={"agent-A": 0.9, "agent-B": 0.85, "agent-C": 0.7})
-
-if result.reached:
-    print(result.winning_decision)   # "deploy-v2"
-    print(result.confidence_score)   # 0.83
-else:
-    print(result.outcome)            # DEADLOCK or ESCALATE_TO_HUMAN
+print(result.reaching, result.winning_decision)  # True, "deploy-v2"
 ```
-
-Supported strategies: `WEIGHTED_VOTE`, `QUORUM`, `UNANIMOUS`, `CONFIDENCE_THRESHOLD`.
 
 ---
 
-### 🚌 Coordination Bus
-Event-driven pub/sub for loosely coupled agent coordination.
+## REST API
 
-```python
-from pact_ax.coordination.coordination_bus import CoordinationBus, AgentMessage
+PACT-AX ships a 84-route FastAPI server. Run it:
 
-bus = CoordinationBus()
+```bash
+git clone https://github.com/neurobloomai/pact-ax
+cd pact-ax
+pip install -r requirements.txt
+uvicorn pact_ax.api.server:app --reload
+```
 
-# Subscribe to message types
-bus.subscribe("handoff.requested", lambda msg: handle_handoff(msg))
+Swagger docs at `http://localhost:8000/docs`.
 
-# Publish events
-bus.publish(AgentMessage(
-    sender="agent-A",
-    message_type="handoff.requested",
-    payload={"to": "agent-B", "task": "billing_resolution"},
-))
+Or use the SDK instead of calling HTTP directly:
+
+```bash
+pip install pact-ax-client
 ```
 
 ---
 
 ## Demos
 
-All demos and runnable examples live in **[neurobloomai/pact-demos](https://github.com/neurobloomai/pact-demos)** — including the five-primitive integration demo, the Orchestrator fan-out demo, and more.
+All runnable demos live in **[neurobloomai/pact-demos](https://github.com/neurobloomai/pact-demos)**:
 
 ```bash
 git clone https://github.com/neurobloomai/pact-demos
 cd pact-demos
 pip install -r requirements.txt
-python demos/four_primitive/demo.py
-python demos/orchestrator/demo.py
+python demos/capability_routing/demo.py
+python demos/orchestrate_rest/demo.py
 ```
 
 ---
 
-## Quick Start
-
-```python
-from pact_ax.primitives import (
-    StoryKeeper, ContextShareManager, TrustManager, ContextType, Priority
-)
-from pact_ax.state import StateTransferManager, HandoffReason
-
-# 1. Build story context through conversation
-keeper = StoryKeeper("agent-001")
-keeper.process_turn("Help me analyse our Q3 revenue numbers")
-
-# 2. Share context with another agent
-manager = ContextShareManager("agent-001", agent_type="analyst")
-packet = manager.create_context_packet(
-    target_agent="agent-002",
-    context_type=ContextType.TASK_KNOWLEDGE,
-    payload={"task": "Q3 revenue analysis", "progress": 0.4},
-)
-
-# 3. Hand off when approaching capability limits
-status = manager.sense_capability_limit("financial_modelling")
-if status["approaching_limit"]:
-    sender = StateTransferManager("agent-001", story_keeper=keeper)
-    pid = sender.prepare(
-        to_agent_id="agent-002",
-        state_data={"task": "Q3 analysis", "progress": 0.4},
-        reason=HandoffReason.ESCALATION,
-    )
-    packet = sender.send(pid)
-
-# 4. Receive on the other side
-receiver = StateTransferManager("agent-002")
-result = receiver.receive(packet)
-print(result.success, result.integrated_state)
-```
-
----
-
-## Installation
+## Development
 
 ```bash
-pip install pact-ax
-```
-
-Or from source:
-
-```bash
-git clone https://github.com/neurobloomai/pact-ax.git
+git clone https://github.com/neurobloomai/pact-ax
 cd pact-ax
-pip install -e .
+pip install -r requirements.txt
+pytest tests/ -v                          # 743 tests
+pytest tests/unit/ -v                     # unit only
+pytest tests/integration/ -v             # integration only
 ```
 
 ---
 
-## Development Roadmap
+## Roadmap
 
-### ✅ Implemented
-- [x] **StoryKeeper** — narrative continuity, arc detection, multi-session persistence
-- [x] **ContextShareManager** — trust-aware context packets, capability sensing, handoff preparation
-- [x] **TrustManager** — per-context trust tracking, time-based decay, network reputation
-- [x] **StateTransferManager** — full handoff lifecycle (prepare → send → receive → integrate → rollback), checkpoints, epistemic state transfer
-- [x] **ConsensusProtocol** — weighted vote, quorum, unanimous, confidence-threshold strategies
-- [x] **CoordinationBus** — event-driven pub/sub for agent coordination
-- [x] **EpistemicStateTransfer** — knowledge + confidence fidelity across handoffs
+### ✅ Built
+- StoryKeeper — narrative continuity, arc detection, multi-session persistence
+- ContextShareManager — trust-aware context packets, capability sensing
+- TrustManager — per-context trust, time-based decay, network reputation, **persistent SQLite**
+- StateTransferManager — full handoff lifecycle, checkpoints, epistemic state transfer
+- ConsensusProtocol — weighted vote, quorum, unanimous, confidence-threshold
+- CoordinationBus — event-driven pub/sub
+- CapabilityRegistry — skill registration, semantic search, tag filtering
+- AgentRouter — trust-weighted routing, fuzzy search
+- EpisodicMemory — record, recall, summary, partner analytics
+- DeadLetterQueue — enqueue, retry, exhaustion, exponential backoff
+- REST API — 84 routes across all primitives
+- **pact-ax-client** — Python SDK on PyPI (`pip install pact-ax-client`)
 
-### 🔄 In Progress
-- [ ] Policy alignment — conflict resolution between agent policies
-- [ ] Persistent trust store — trust scores that survive process restarts
-- [ ] REST API layer — HTTP endpoints for cross-process agent coordination
-- [ ] `pact_ax.primitives.context_share` schema validation (Pydantic)
-
-### 🎯 Planned
-- [ ] PACT-HX integration (Human Experience Layer)
-- [ ] Real-time collaboration analytics dashboard
-- [ ] Cross-platform agent discovery registry
-- [ ] Jazz ↔ Symphony mode auto-detection
-- [ ] Multi-agent orchestration patterns
+### 🎯 Next
+- TypeScript SDK (`npm install pact-ax-client`)
+- Docker / one-command server setup
+- Real integration (GitHub Actions, Slack bot)
+- PACT-HX integration (Human Experience Layer)
 
 ---
 
@@ -348,88 +286,35 @@ pip install -e .
 ```
 pact_ax/
 ├── primitives/
-│   ├── story_keeper.py          # StoryKeeper
-│   ├── context_share/           # ContextShareManager + full schema types
-│   │   ├── manager.py
-│   │   └── schemas.py           # ContextPacket, AgentIdentity, TrustEvolution, ...
-│   └── trust_score.py           # TrustManager
+│   ├── story_keeper.py
+│   ├── context_share/
+│   ├── trust_score.py
+│   ├── capability_registry.py
+│   ├── agent_router.py
+│   ├── episodic_memory.py
+│   └── dead_letter_queue.py
 ├── state/
-│   ├── state_transfer_manager.py  # StateTransferManager (canonical)
-│   └── epistemic_transfer.py      # EpistemicStateTransfer
-└── coordination/
-    ├── consensus.py             # ConsensusProtocol
-    └── coordination_bus.py      # CoordinationBus
+│   ├── state_transfer_manager.py
+│   └── epistemic_transfer.py
+├── coordination/
+│   ├── consensus.py
+│   └── coordination_bus.py
+└── api/
+    ├── server.py
+    └── routes/
+        ├── capabilities.py
+        ├── trust.py
+        ├── agent_router.py
+        ├── episodic_memory.py
+        ├── dead_letter.py
+        ├── consensus.py
+        └── transfer.py
 ```
-
----
-
-## Philosophical Foundations
-
-### The Collaboration Spectrum
-- **Individual Mastery** → **Small Group Jazz** → **Large Scale Symphony**
-- **Solo thinking** → **Intimate collaboration (3-4 agents)** → **Orchestrated coordination (100+ agents)**
-
-### Learning Through Iteration
-- **No failures, only iterations** of learning and expansion
-- **Always arriving imperfect** but arriving beautifully
-- **Organic timing** over forced milestones
-
-### Trust as Infrastructure
-- **Continuous trust building** through authentic interaction
-- **Network effects** — each successful collaboration strengthens the whole
-- **Quality over quantity** in collaboration partnerships
-
----
-
-## Contributing
-
-We welcome contributions from developers who share our vision of joyful, abundant collaboration between AI agents.
-
-**Our Approach:**
-- **Organic development** — let features emerge from real needs
-- **Both technical excellence AND human wisdom** — EI+AI integration
-- **Open source abundance** — share knowledge freely to create more value for everyone
-
-See [CONTRIBUTING.md](docs/contributing.md) for guidelines.
-
----
-
-## Research & Inspiration
-
-PACT-AX draws inspiration from diverse sources:
-- **Organizational Learning Theory** (Ray Dalio's Principles)
-- **Jazz Improvisation Dynamics** (collaborative creativity research)
-- **Abundance Economics** (Naval Ravikant's leverage principles)
-- **Systems Thinking** (complex adaptive systems)
-- **Contemplative Traditions** (patience, presence, organic unfolding)
-
----
-
-## Community
-
-- **GitHub Discussions**: Share ideas and collaborate on features
-- **Discord**: Real-time conversation with other builders
-- **Newsletter**: Updates on neurobloom.ai ecosystem development
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) file.
+MIT — built with 🎵 by the [neurobloom.ai](https://neurobloom.ai) community.
 
-Built with 🎵 by the neurobloom.ai community.
-
-*Where Artificial Intelligence meets Emotional Intelligence, and collaboration becomes an art form.*
-
----
-
-## Contact
-
-**neurobloom.ai Team**
-- Email: founders@neurobloom.ai
-- Website: neurobloom.ai
-- GitHub: [@neurobloomai](https://github.com/neurobloomai)
-
----
-
-*"We are conduits of creation, building the infrastructure for human potential in the AI age."*
+*Where Artificial Intelligence meets Emotional Intelligence.*

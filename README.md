@@ -1,9 +1,8 @@
 # PACT-AX: Agent Collaboration Layer
 ### Part of the neurobloom.ai Open Source Ecosystem
 
-![neurobloom.ai](https://img.shields.io/badge/neurobloom.ai-collaborative--intelligence-blue)
+![CI](https://github.com/neurobloomai/pact-ax/actions/workflows/ci.yml/badge.svg)
 ![MIT License](https://img.shields.io/badge/license-MIT-green)
-![Status](https://img.shields.io/badge/status-active--development-orange)
 ![Tests](https://img.shields.io/badge/tests-743%20passing-brightgreen)
 ![PyPI](https://img.shields.io/pypi/v/pact-ax-client?label=pact-ax-client)
 

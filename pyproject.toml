@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pact-ax"
-version = "0.1.0"
+version = "0.1.1"
 description = "PACT Agent Collaboration Layer - Multi-Agent Coordination Protocol"
 readme = "README.md"
 license = "MIT"

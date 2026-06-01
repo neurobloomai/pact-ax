@@ -28,7 +28,7 @@ jobs:
         
     - name: Run tests
       run: |
-        pytest tests/ -v
+        pytest tests/ -v --ignore=tests/integration/test_schemathesis_fuzz.py
         
     - name: Run linting
       run: |

@@ -311,6 +311,4 @@ pact_ax/
 
 ## License
 
-MIT — built with 🎵 by the [neurobloom.ai](https://neurobloom.ai) community.
-
-*Where Artificial Intelligence meets Emotional Intelligence.*
+MIT — built by the [neurobloom.ai](https://neurobloom.ai) community.

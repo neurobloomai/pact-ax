@@ -33,19 +33,15 @@ if decision.routed:
 
 ---
 
-## Overview
+## What problem does this solve?
 
-PACT-AX provides primitives for safe collaboration, context sharing, and knowledge transfer between heterogeneous AI agents. Built on the principle that **trust scales while control just moves bottlenecks**, PACT-AX enables distributed AI collaboration that mirrors the best of human teamwork.
+When you build a system with more than one AI agent, you immediately hit the same three problems:
 
-## Core Philosophy: EI + AI
+1. **Who handles this?** — no way to discover which agent has the right skill
+2. **Can I trust the answer?** — no persistent record of how agents have performed before
+3. **How do I hand off context?** — passing state between agents loses continuity
 
-**Emotional Intelligence + Artificial Intelligence**
-
-PACT-AX integrates human collaboration wisdom with AI technical capabilities:
-- **Jazz-like improvisation** for small-scale agent interactions
-- **Symphonic coordination** for large-scale agent orchestration
-- **MVI (Minimum Viable Intervention)** — maximum collaboration impact with minimal overhead
-- **Organic trust building** through continuous interaction rather than one-time verification
+PACT-AX solves all three. It's a FastAPI server (84 routes) that your agents call to register capabilities, track trust, route tasks, hand off state, and record episodic memory. The Python SDK (`pact-ax-client`) wraps the API so you don't touch HTTP directly.
 
 ---
 

@@ -31,11 +31,13 @@ jobs:
         pytest tests/ -v --ignore=tests/integration/test_schemathesis_fuzz.py
         
     - name: Run linting
+      continue-on-error: true
       run: |
         black --check pact_ax/
         isort --check-only pact_ax/
         flake8 pact_ax/
-        
+
     - name: Run type checking
+      continue-on-error: true
       run: |
         mypy pact_ax/

@@ -1,6 +1,6 @@
 # PACT-AX: Agent Collaboration Layer
 
-### "PACT-AX is the trust layer that makes agent coordination persistent, auditable, and drift-resistant."
+### PACT-AX is the trust layer that makes agent coordination persistent, auditable, and drift-resistant.
 
 ### Part of the neurobloom.ai Open Source Ecosystem
 

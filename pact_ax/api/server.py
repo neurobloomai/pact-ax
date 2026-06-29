@@ -35,6 +35,7 @@ from pact_ax.api.routes.agent_router import router as agent_router_router
 from pact_ax.api.routes.consensus import router as consensus_router
 from pact_ax.api.routes.dead_letter import router as dlq_router
 from pact_ax.api.routes.episodic_memory import router as memory_router
+from pact_ax.api.routes.trust_chain import router as trust_chain_router
 
 # Shared access-layer singletons — same instances used by middleware and routes
 _key_store = KeyStore(db_path="access.db")
@@ -76,6 +77,7 @@ app.include_router(agent_router_router)
 app.include_router(consensus_router)
 app.include_router(dlq_router)
 app.include_router(memory_router)
+app.include_router(trust_chain_router)
 
 
 @app.get("/health", tags=["meta"], summary="Health check")

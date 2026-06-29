@@ -204,6 +204,46 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["agent_id"],
             },
         ),
+        # ── Trust Chain ───────────────────────────────────────────────────────
+        types.Tool(
+            name="trust_chain_score",
+            description=(
+                "Score a chain of agents (A→B→C) for relational coherence. "
+                "Returns chain_trust (geometric mean across hops), coherence "
+                "(variance across hops), state (active/degraded/broken), and "
+                "the weakest hop. Does not record the chain."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "agents": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "description": "Ordered list of agent IDs forming the chain",
+                    },
+                },
+                "required": ["agents"],
+            },
+        ),
+        types.Tool(
+            name="trust_chain_verify",
+            description=(
+                "Re-verify a recorded trust chain against current trust scores. "
+                "Returns per-hop drift, whether state changed "
+                "(e.g. active→degraded), and updated chain_trust."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chain_id": {
+                        "type": "string",
+                        "description": "chain_id from /trust-chain/record",
+                    },
+                },
+                "required": ["chain_id"],
+            },
+        ),
         # ── State Transfer ────────────────────────────────────────────────────
         types.Tool(
             name="transfer_prepare",
@@ -337,6 +377,16 @@ async def _dispatch(client: httpx.AsyncClient, name: str, args: dict):
         if args.get("min_importance") is not None:
             params["min_importance"] = args["min_importance"]
         r = await client.get(f"/memory/episodes/{args['agent_id']}", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    elif name == "trust_chain_score":
+        r = await client.post("/trust-chain/score", json={"agents": args["agents"]})
+        r.raise_for_status()
+        return r.json()
+
+    elif name == "trust_chain_verify":
+        r = await client.post(f"/trust-chain/{args['chain_id']}/verify")
         r.raise_for_status()
         return r.json()
 

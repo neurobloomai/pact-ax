@@ -93,6 +93,7 @@ neurobloom.ai Ecosystem
     │   ├── StoryKeeper          — narrative continuity across turns
     │   ├── ContextShareManager  — trust-aware context exchange
     │   ├── TrustManager         — network-wide trust scoring (persistent SQLite)
+    │   ├── TrustChainManager    — relational coherence across agent hops (A→B→C)
     │   ├── CapabilityRegistry   — agent skill registration and discovery
     │   └── AgentRouter          — trust-weighted task routing
     ├── pact_ax.state
@@ -194,6 +195,44 @@ score = tm.get_trust("agent-002")       # overall
 inferred = tm.get_network_trust("agent-unknown")   # transitive
 trusted = tm.get_trusted_agents(min_trust=0.7)
 ```
+
+### 🔗 Trust Chain
+
+TrustManager answers point-in-time questions about pairs. TrustChain answers the next question: when Agent A → Agent B → Agent C, is the full chain still coherent — not at initialization, but now?
+
+```python
+from pact_ax.primitives import TrustChainManager
+
+def resolver(from_id, to_id):
+    return trust_managers[from_id].get_trust(to_id)
+
+mgr = TrustChainManager(trust_resolver=resolver)
+
+# Score without recording — chain_trust, coherence, weakest hop
+score = mgr.score(["agent-a", "agent-b", "agent-c"])
+print(score.chain_trust)    # geometric mean across hops
+print(score.coherence)      # 1.0 = all hops equal strength
+print(score.weakest_pair)   # ("agent-b", "agent-c")
+print(score.state)          # active / degraded / broken
+
+# Record a chain and verify it later
+chain = mgr.record(["agent-a", "agent-b", "agent-c"])
+
+# Re-verify against current trust — detects drift since baseline
+verify = mgr.verify(chain.chain_id)
+print(verify.state_changed)     # True if chain degraded
+print(verify.hop_drift)         # per-hop baseline vs current
+```
+
+**Scoring model:**
+- `chain_trust` — geometric mean of hop scores. A chain of [0.9, 0.3, 0.9] scores 0.63, not 0.9. Weak links cannot hide.
+- `coherence` — 1.0 minus normalised std-dev. Flags uneven chains even when the average looks fine.
+- `weakest_hop` — names the bottleneck agent relationship.
+- `ChainState` — `ACTIVE` (≥0.7 trust, ≥0.6 coherence) / `DEGRADED` / `BROKEN` / `COMPLETED`.
+
+REST API: `POST /trust-chain/score`, `POST /trust-chain/record`, `POST /trust-chain/{id}/verify`
+
+MCP tools: `trust_chain_score`, `trust_chain_verify`
 
 ### 🧠 Episodic Memory
 
@@ -364,6 +403,7 @@ pytest tests/integration/ -v             # integration only
 - StoryKeeper — narrative continuity, arc detection, multi-session persistence
 - ContextShareManager — trust-aware context packets, capability sensing
 - TrustManager — per-context trust, time-based decay, network reputation, **persistent SQLite**
+- TrustChainManager — relational coherence across agent hops; geometric mean scoring, drift detection, chain state transitions (active/degraded/broken)
 - StateTransferManager — full handoff lifecycle, checkpoints, epistemic state transfer
 - ConsensusProtocol — weighted vote, quorum, unanimous, confidence-threshold
 - CoordinationBus — event-driven pub/sub

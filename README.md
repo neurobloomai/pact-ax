@@ -35,9 +35,24 @@ if decision.routed:
 
 ---
 
+## The gap nobody named
+
+The industry is solving token delegation — a signed credential at initialization, a binary check at T=0. That's authentication dressed as trust. A snapshot.
+
+PACT-AX solves trust as a continuous process. Not "was this agent authorized?" but "is this relationship still coherent — across every hop, every handoff, every state change?"
+
+Token says: you were trusted.  
+PACT-AX says: are you still trustworthy?
+
+This is the category error the entire industry is making right now. Every framework — LangChain, LangGraph, CrewAI, AutoGen — assumes trust at initialization and never verifies it again.
+
+> "Safety is a moment. Trust is duration."
+
+---
+
 ## What problem does this solve?
 
-When you build a system with more than one AI agent, you immediately hit the same three problems:
+When you build a system with more than one AI agent, you hit three problems immediately — but underneath all three is one root cause: nobody is tracking whether agents remain trustworthy over time. PACT-AX is the substrate that makes trust computable, persistent, and continuous.
 
 1. **Who handles this?** — no way to discover which agent has the right skill
 2. **Can I trust the answer?** — no persistent record of how agents have performed before

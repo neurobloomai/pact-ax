@@ -262,6 +262,75 @@ pip install pact-ax-client
 
 ---
 
+## MCP Server
+
+PACT-AX ships an MCP server that exposes trust primitives as tools — so Claude Code, Cursor, and any MCP-native client can call trust, routing, memory, and handoff operations directly without touching HTTP.
+
+**Start the PACT-AX server first:**
+
+```bash
+uvicorn pact_ax.api.server:app --reload
+```
+
+**Run the MCP server:**
+
+```bash
+python -m pact_ax.mcp.server
+```
+
+**Wire into Claude Code** (`~/.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "pact-ax": {
+      "command": "python",
+      "args": ["-m", "pact_ax.mcp.server"],
+      "env": { "PACT_AX_URL": "http://localhost:8000" }
+    }
+  }
+}
+```
+
+**Wire into Cursor** (`.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "pact-ax": {
+      "command": "python",
+      "args": ["-m", "pact_ax.mcp.server"],
+      "env": { "PACT_AX_URL": "http://localhost:8000" }
+    }
+  }
+}
+```
+
+**Available tools (12):**
+
+| Tool | What it does |
+|---|---|
+| `trust_get` | Get trust score between two agents |
+| `trust_update` | Record a collaboration outcome and update trust |
+| `trust_network` | Get transitive network trust for an indirect agent |
+| `trust_insights` | Full trust relationship breakdown for an agent |
+| `trust_agents` | List all agents trusted above a threshold |
+| `route_task` | Route a task to the best trusted+capable agent (exact skill) |
+| `route_any` | Route by fuzzy keyword search across all capabilities |
+| `capability_register` | Register a skill for an agent |
+| `capability_find` | Find agents registered for a skill |
+| `memory_record` | Record an episodic interaction |
+| `memory_recall` | Recall past episodes with filters |
+| `transfer_prepare` | Prepare a state handoff packet |
+
+**Environment:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `PACT_AX_URL` | `http://localhost:8000` | Base URL of the PACT-AX server |
+
+---
+
 ## Demos
 
 All runnable demos live in **[neurobloomai/pact-demos](https://github.com/neurobloomai/pact-demos)**:

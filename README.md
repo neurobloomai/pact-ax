@@ -47,6 +47,25 @@ PACT-AX solves all three. It's a FastAPI server (84 routes) that your agents cal
 
 ---
 
+## The Category Error
+
+The industry is solving token delegation — a signed credential, a binary check at T=0. That is authentication dressed as trust. A snapshot.
+
+The question is not "was this agent authorized at initialization?"
+
+The question is "is this relationship still coherent — across every interaction, every hop, every state change?"
+
+**Token says: you were trusted.**  
+**PACT-AX says: are you still trustworthy?**
+
+Token delegation is a safety primitive. It answers a moment. The entire field is solving safety and calling it trust.
+
+PACT-AX operates at the actual trust layer: duration, not moment.
+
+> **Safety is a moment. Trust is duration.**
+
+---
+
 ## Architecture
 
 ```

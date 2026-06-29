@@ -166,21 +166,46 @@ packet = manager.create_context_packet(
 )
 ```
 
-### 🔄 State Transfer
+### 🔄 Trust-Gated State Transfer
 
-Full handoff lifecycle — prepare, send, receive, checkpoint:
+Full handoff lifecycle with trust verification baked in — not bolted on after.
+
+Every `receive()` runs an authoritative trust gate: the receiver checks its own `TrustManager` for the sender's history-backed score (not the heuristic the sender stamped on the packet), then optionally checks chain coherence via `TrustChainManager`. Broken chains are rejected. Degraded chains pass with a warning. Both checks surface in `TrustGateResult` on the `IntegrationResult`.
 
 ```python
 from pact_ax.state import StateTransferManager, HandoffReason
+from pact_ax.primitives import TrustManager, TrustChainManager
 
-sender = StateTransferManager(agent_id="agent-A")
+# Sender: TrustManager wires history-backed score into the packet
+sender_tm = TrustManager(agent_id="agent-A")
+sender    = StateTransferManager(agent_id="agent-A", trust_manager=sender_tm)
 packet_id = sender.prepare("agent-B", state_data={"task": "analyse Q3"}, reason=HandoffReason.CONTINUATION)
-packet = sender.send(packet_id)
+packet    = sender.send(packet_id)
 
-receiver = StateTransferManager(agent_id="agent-B")
+# Receiver: checks its own TrustManager + chain coherence before integrating
+receiver_tm    = TrustManager(agent_id="agent-B")
+chain_mgr      = TrustChainManager(trust_resolver=lambda f, t: receiver_tm.get_trust(t))
+receiver       = StateTransferManager(
+    agent_id="agent-B",
+    trust_manager=receiver_tm,
+    trust_chain_manager=chain_mgr,
+    trust_floor=0.4,
+)
 result = receiver.receive(packet)
-print(result.success, result.integrated_state)
+
+print(result.success)                          # True / False
+print(result.trust_gate.sender_trust)         # score from receiver's TrustManager
+print(result.trust_gate.sender_trust_source)  # "trust_manager" | "heuristic"
+print(result.trust_gate.chain_state)          # "active" | "degraded" | "broken"
+print(result.warnings)                        # degraded chain → warn but don't reject
 ```
+
+**Trust gate layers:**
+1. `validate()` — structural checks (address, TTL, non-empty state). Heuristic floor when no TrustManager.
+2. `_run_trust_gate()` — receiver's own `TrustManager.get_trust(sender)` against `trust_floor`. Broken `TrustChain` → reject. Degraded → warn.
+3. `TrustGateResult` — surfaces `sender_trust`, `sender_trust_source`, `chain_trust`, `chain_state`, `passed`, `rejection_reason` on every `IntegrationResult`.
+
+Works without any trust primitives — falls back to heuristic, full backward compatibility.
 
 ### 🛡️ Trust Scoring
 
@@ -282,16 +307,43 @@ print(result.reaching, result.winning_decision)  # True, "deploy-v2"
 
 ## REST API
 
-PACT-AX ships a 84-route FastAPI server. Run it:
+PACT-AX ships a 84-route FastAPI server.
+
+### One-command start (Docker)
 
 ```bash
 git clone https://github.com/neurobloomai/pact-ax
 cd pact-ax
-pip install -r requirements.txt
+docker compose up
+```
+
+Server starts at `http://localhost:8000`. SQLite DBs are written to `./data/` and persist across restarts.
+
+Swagger docs at `http://localhost:8000/docs`.
+
+### Run without Docker
+
+```bash
+git clone https://github.com/neurobloomai/pact-ax
+cd pact-ax
+pip install -e .
 uvicorn pact_ax.api.server:app --reload
 ```
 
-Swagger docs at `http://localhost:8000/docs`.
+### Environment variables
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `PACT_PORT` | `8000` | Host port (Docker only) |
+| `PACT_ENFORCE_AUTH` | `0` | `1` = require API keys on every request |
+| `PACT_TRUST_DB` | `trust.db` | SQLite path for trust scores |
+| `PACT_CAP_DB` | `capabilities.db` | SQLite path for capability registry |
+| `PACT_STORY_DB` | `story_keeper.db` | SQLite path for narrative memory |
+| `PACT_MEMORY_DB` | `episodic.db` | SQLite path for episodic memory |
+| `PACT_DLQ_DB` | `dlq.db` | SQLite path for dead letter queue |
+| `PACT_ACCESS_DB` | `access.db` | SQLite path for API key store |
+
+Copy `.env.example` to `.env` to configure locally.
 
 Or use the SDK instead of calling HTTP directly:
 
@@ -404,7 +456,7 @@ pytest tests/integration/ -v             # integration only
 - ContextShareManager — trust-aware context packets, capability sensing
 - TrustManager — per-context trust, time-based decay, network reputation, **persistent SQLite**
 - TrustChainManager — relational coherence across agent hops; geometric mean scoring, drift detection, chain state transitions (active/degraded/broken)
-- StateTransferManager — full handoff lifecycle, checkpoints, epistemic state transfer
+- StateTransferManager — trust-gated handoff lifecycle; receiver-side TrustManager + TrustChain verification, TrustGateResult on every IntegrationResult
 - ConsensusProtocol — weighted vote, quorum, unanimous, confidence-threshold
 - CoordinationBus — event-driven pub/sub
 - CapabilityRegistry — skill registration, semantic search, tag filtering
@@ -413,10 +465,10 @@ pytest tests/integration/ -v             # integration only
 - DeadLetterQueue — enqueue, retry, exhaustion, exponential backoff
 - REST API — 84 routes across all primitives
 - **pact-ax-client** — Python SDK on PyPI (`pip install pact-ax-client`)
+- Docker — `docker compose up` one-command start; `./data/` volume for SQLite persistence
 
 ### 🎯 Next
 - TypeScript SDK (`npm install pact-ax-client`)
-- Docker / one-command server setup
 - Real integration (GitHub Actions, Slack bot)
 - PACT-HX integration (Human Experience Layer)
 

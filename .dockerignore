@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+
+# SQLite DBs — don't bake dev data into the image
+*.db
+
+# Tests
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Dev tooling
+.mypy_cache/
+.ruff_cache/
+.flake8
+.pre-commit-config.yaml
+
+# Git
+.git/
+.gitignore
+
+# Docs / blog / examples (not needed at runtime)
+docs/
+blog/
+examples/
+scripts/
+story_keeper_test/
+primitives/
+proxy/
+src/
+
+# Env files — never bake secrets into the image
+.env
+.env.*
+!.env.example
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+
+# CI / GitHub
+.github/
+pact-ax-audit.jsonl
+PR_DESCRIPTION*.md

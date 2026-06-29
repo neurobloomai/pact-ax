@@ -38,7 +38,8 @@ from pact_ax.api.routes.episodic_memory import router as memory_router
 from pact_ax.api.routes.trust_chain import router as trust_chain_router
 
 # Shared access-layer singletons — same instances used by middleware and routes
-_key_store = KeyStore(db_path="access.db")
+_ACCESS_DB = os.getenv("PACT_ACCESS_DB", "access.db")
+_key_store = KeyStore(db_path=_ACCESS_DB)
 _limiter   = RateLimiter()
 
 app = FastAPI(

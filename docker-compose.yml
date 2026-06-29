@@ -1,0 +1,25 @@
+services:
+  pact-ax:
+    build: .
+    ports:
+      - "${PACT_PORT:-8000}:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      # Auth — disabled by default for local dev; set to 1 in production
+      PACT_ENFORCE_AUTH: "${PACT_ENFORCE_AUTH:-0}"
+
+      # SQLite DB paths — all under /data so they persist across restarts
+      PACT_ACCESS_DB:  /data/access.db
+      PACT_TRUST_DB:   /data/trust.db
+      PACT_CAP_DB:     /data/capabilities.db
+      PACT_STORY_DB:   /data/story_keeper.db
+      PACT_MEMORY_DB:  /data/episodic.db
+      PACT_DLQ_DB:     /data/dlq.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

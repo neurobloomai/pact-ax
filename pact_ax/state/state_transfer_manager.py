@@ -164,12 +164,14 @@ class IntegrationResult:
         integrated_state: Optional[Dict[str, Any]] = None,
         warnings: Optional[List[str]] = None,
         error: Optional[str] = None,
+        trust_gate: Optional["TrustGateResult"] = None,
     ) -> None:
         self.success          = success
         self.packet_id        = packet_id
         self.integrated_state = integrated_state or {}
         self.warnings         = warnings or []
         self.error            = error
+        self.trust_gate       = trust_gate
 
     def __repr__(self) -> str:
         tag = "OK" if self.success else f"FAIL({self.error})"
@@ -187,6 +189,53 @@ class ValidationResult:
 
     def __repr__(self) -> str:
         return f"ValidationResult(valid={self.valid}, issues={self.issues})"
+
+
+class TrustGateResult:
+    """
+    Outcome of the receiver-side trust gate check performed during receive().
+
+    Records what was checked (TrustManager, TrustChainManager, or heuristic
+    fallback), the scores observed, and whether the gate passed.
+    """
+
+    def __init__(
+        self,
+        sender_trust: float,
+        sender_trust_source: str,         # "trust_manager" | "heuristic"
+        passed: bool,
+        chain_verified: bool = False,
+        chain_trust: Optional[float] = None,
+        chain_state: Optional[str] = None,
+        rejection_reason: Optional[str] = None,
+    ) -> None:
+        self.sender_trust        = sender_trust
+        self.sender_trust_source = sender_trust_source
+        self.passed              = passed
+        self.chain_verified      = chain_verified
+        self.chain_trust         = chain_trust
+        self.chain_state         = chain_state
+        self.rejection_reason    = rejection_reason
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "sender_trust":        self.sender_trust,
+            "sender_trust_source": self.sender_trust_source,
+            "passed":              self.passed,
+            "chain_verified":      self.chain_verified,
+            "chain_trust":         self.chain_trust,
+            "chain_state":         self.chain_state,
+            "rejection_reason":    self.rejection_reason,
+        }
+
+    def __repr__(self) -> str:
+        tag = "PASS" if self.passed else f"FAIL({self.rejection_reason})"
+        return (
+            f"TrustGateResult({tag}, trust={self.sender_trust:.2f} "
+            f"[{self.sender_trust_source}]"
+            + (f", chain={self.chain_state}" if self.chain_verified else "")
+            + ")"
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -218,13 +267,17 @@ class StateTransferManager:
         self,
         agent_id: str,
         story_keeper=None,
+        trust_manager=None,
+        trust_chain_manager=None,
         trust_floor: float = 0.3,
         packet_ttl_minutes: int = 120,
     ) -> None:
-        self.agent_id            = agent_id
-        self.story_keeper        = story_keeper
-        self.trust_floor         = trust_floor
-        self.packet_ttl_minutes  = packet_ttl_minutes
+        self.agent_id             = agent_id
+        self.story_keeper         = story_keeper
+        self.trust_manager        = trust_manager        # TrustManager instance or None
+        self.trust_chain_manager  = trust_chain_manager  # TrustChainManager instance or None
+        self.trust_floor          = trust_floor
+        self.packet_ttl_minutes   = packet_ttl_minutes
 
         self._outbound: Dict[str, HandoffPacket]  = {}   # packets we sent
         self._inbound:  Dict[str, HandoffPacket]  = {}   # packets we received
@@ -260,29 +313,125 @@ class StateTransferManager:
         reason: HandoffReason,
     ) -> float:
         """
-        Heuristic trust score (0.0 – 1.0).
+        Compute the sender-side trust score stamped on the outbound packet.
 
-        In production this should call a dedicated TrustScorer.  The heuristic
-        below provides a sensible baseline without external dependencies.
+        If a TrustManager is wired in, queries it for the sender's trust in
+        the recipient — a real, history-backed value.  Falls back to a
+        structural heuristic when no TrustManager is available.
         """
-        score = 0.7  # baseline
+        if self.trust_manager is not None:
+            try:
+                score = self.trust_manager.get_trust(to_agent_id)
+                logger.debug(
+                    "TrustManager score for %s→%s: %.4f", self.agent_id, to_agent_id, score
+                )
+                return round(min(max(float(score), 0.0), 1.0), 4)
+            except Exception as exc:
+                logger.warning(
+                    "TrustManager.get_trust(%r) failed, falling back to heuristic: %s",
+                    to_agent_id, exc,
+                )
 
-        # Escalation warrants extra scrutiny
+        # Structural heuristic fallback
+        score = 0.7
+
         if reason == HandoffReason.ESCALATION:
             score -= 0.05
 
-        # Higher average confidence in epistemic states → higher trust
         if epistemic_payload:
             avg_conf = sum(
                 ep.get("confidence_value", 0.5) for ep in epistemic_payload
             ) / len(epistemic_payload)
-            score += (avg_conf - 0.5) * 0.2   # ±0.10 adjustment
+            score += (avg_conf - 0.5) * 0.2
 
-        # Richer state context → slightly higher trust
         if len(state_data) >= 5:
             score += 0.05
 
         return round(min(max(score, 0.0), 1.0), 4)
+
+    def _get_authoritative_sender_trust(self, from_agent_id: str) -> tuple:
+        """
+        Query the receiver's TrustManager for the sender's trust score.
+
+        Returns (score: float, source: str).  Source is "trust_manager" when
+        a real history-backed score is returned, or "heuristic" when no
+        TrustManager is available and we must trust the packet's own field.
+        """
+        if self.trust_manager is not None:
+            try:
+                score = float(self.trust_manager.get_trust(from_agent_id))
+                return score, "trust_manager"
+            except Exception as exc:
+                logger.warning(
+                    "Receiver TrustManager.get_trust(%r) failed: %s", from_agent_id, exc
+                )
+        return None, "heuristic"
+
+    def _run_trust_gate(self, packet: "HandoffPacket") -> "TrustGateResult":
+        """
+        Authoritative receiver-side trust gate.
+
+        Checks the sender against the receiver's own TrustManager (not the
+        sender-stamped heuristic in the packet), then optionally checks chain
+        coherence via TrustChainManager.  Called in receive() after structural
+        validation passes.
+        """
+        real_score, source = self._get_authoritative_sender_trust(packet.from_agent_id)
+
+        # Fall back to packet's self-reported score only when no TrustManager
+        if real_score is None:
+            real_score = packet.trust_score
+            source     = "heuristic"
+
+        if real_score < self.trust_floor:
+            return TrustGateResult(
+                sender_trust        = real_score,
+                sender_trust_source = source,
+                passed              = False,
+                rejection_reason    = (
+                    f"Sender trust {real_score:.2f} below floor {self.trust_floor:.2f} "
+                    f"(source: {source})"
+                ),
+            )
+
+        # Chain coherence check
+        chain_trust  = None
+        chain_state  = None
+        chain_verified = False
+
+        if self.trust_chain_manager is not None:
+            try:
+                chain_score    = self.trust_chain_manager.score(
+                    [packet.from_agent_id, self.agent_id]
+                )
+                chain_trust    = chain_score.chain_trust
+                chain_state    = chain_score.state.value
+                chain_verified = True
+
+                if chain_state == "broken":
+                    return TrustGateResult(
+                        sender_trust        = real_score,
+                        sender_trust_source = source,
+                        passed              = False,
+                        chain_verified      = chain_verified,
+                        chain_trust         = chain_trust,
+                        chain_state         = chain_state,
+                        rejection_reason    = (
+                            f"Trust chain BROKEN between {packet.from_agent_id!r} "
+                            f"and {self.agent_id!r} (chain_trust={chain_trust:.2f})"
+                        ),
+                    )
+            except Exception as exc:
+                logger.warning("TrustChainManager check failed: %s", exc)
+
+        return TrustGateResult(
+            sender_trust        = real_score,
+            sender_trust_source = source,
+            passed              = True,
+            chain_verified      = chain_verified,
+            chain_trust         = chain_trust,
+            chain_state         = chain_state,
+        )
 
     def _build_narrative(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Pull story summary from StoryKeeper, or return a stub."""
@@ -458,7 +607,11 @@ class StateTransferManager:
                 f"but this agent is {self.agent_id!r}."
             )
 
-        if packet.trust_score < self.trust_floor:
+        # When a TrustManager is wired in, the authoritative score check happens
+        # in _run_trust_gate() using the receiver's own view of trust — not the
+        # sender-stamped heuristic.  Only apply the heuristic floor here as a
+        # quick sanity check when no TrustManager is available.
+        if self.trust_manager is None and packet.trust_score < self.trust_floor:
             issues.append(
                 f"Trust score {packet.trust_score:.2f} is below floor {self.trust_floor:.2f}."
             )
@@ -506,8 +659,32 @@ class StateTransferManager:
                 error     = "; ".join(validation.issues),
             )
 
+        # ── Authoritative trust gate (receiver's own TrustManager + chain) ───
+        trust_gate = self._run_trust_gate(packet)
+        if not trust_gate.passed:
+            packet.status = TransferStatus.FAILED
+            self._inbound[packet.packet_id] = packet
+            logger.warning(
+                "Trust gate rejected packet %s from %s: %s",
+                packet.packet_id, packet.from_agent_id, trust_gate.rejection_reason,
+            )
+            return IntegrationResult(
+                success    = False,
+                packet_id  = packet.packet_id,
+                error      = trust_gate.rejection_reason,
+                trust_gate = trust_gate,
+            )
+
         packet.status = TransferStatus.RECEIVED
         warnings: List[str] = []
+
+        # Warn (but don't reject) when chain is degraded
+        if trust_gate.chain_verified and trust_gate.chain_state == "degraded":
+            warnings.append(
+                f"Trust chain DEGRADED between {packet.from_agent_id!r} and "
+                f"{self.agent_id!r} (chain_trust={trust_gate.chain_trust:.2f}) — "
+                "proceed with caution."
+            )
 
         # ── Reconstruct epistemic states ──────────────────────────────────
         reconstructed_epistemic = []
@@ -562,6 +739,7 @@ class StateTransferManager:
             packet_id        = packet.packet_id,
             integrated_state = integrated_state,
             warnings         = warnings,
+            trust_gate       = trust_gate,
         )
 
     def rollback(self, packet_id: str) -> bool:
@@ -719,13 +897,15 @@ class StateTransferManager:
             status_counts[p.status.value] = status_counts.get(p.status.value, 0) + 1
 
         return {
-            "agent_id":          self.agent_id,
-            "outbound_count":    len(self._outbound),
-            "inbound_count":     len(self._inbound),
-            "checkpoint_count":  len(self._checkpoints),
-            "active_transfers":  len(self.get_active_transfers()),
-            "status_breakdown":  status_counts,
-            "trust_floor":       self.trust_floor,
+            "agent_id":                self.agent_id,
+            "outbound_count":          len(self._outbound),
+            "inbound_count":           len(self._inbound),
+            "checkpoint_count":        len(self._checkpoints),
+            "active_transfers":        len(self.get_active_transfers()),
+            "status_breakdown":        status_counts,
+            "trust_floor":             self.trust_floor,
+            "trust_manager_wired":     self.trust_manager is not None,
+            "trust_chain_wired":       self.trust_chain_manager is not None,
         }
 
     # ── Convenience / backward-compat wrappers ───────────────────────────────

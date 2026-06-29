@@ -22,6 +22,7 @@ from pact_ax.state.state_transfer_manager import (
     IntegrationResult,
     StateTransferManager,
     TransferStatus,
+    TrustGateResult,
     ValidationResult,
 )
 from pact_ax.state.epistemic_transfer import EpistemicStateTransfer
@@ -31,6 +32,7 @@ __all__ = [
     "HandoffPacket",
     "HandoffReason",
     "IntegrationResult",
+    "TrustGateResult",
     "ValidationResult",
     "TransferStatus",
     "EpistemicStateTransfer",

@@ -323,6 +323,118 @@ class TrustManager:
         """
         return None
 
+    # ------------------------------------------------------------------
+    # TrustAlignmentCheck integration
+    # ------------------------------------------------------------------
+
+    def establish_trust(
+        self,
+        target_id: str,
+        dimensions: list,
+        gate_mode=None,
+        valid_for_seconds: int = 3600,
+        critical_action_threshold=None,
+        max_propagation_depth: Optional[int] = None,
+    ) -> Optional[object]:
+        """
+        Run an n/n TrustAlignmentCheck against *target_id* and, on success,
+        issue a TrustContext scoped to the result.
+
+        Part of PACT-AX trust infrastructure.
+        Safety is a moment. Trust is duration.
+
+        Parameters
+        ----------
+        target_id : str
+            The agent to evaluate.
+        dimensions : list of TrustDimension
+            The alignment dimensions to check.
+        gate_mode : GateMode, optional
+            Defaults to GateMode.STRICT.
+        valid_for_seconds : int
+            Context TTL.  Default 3600.
+        critical_action_threshold : ActionLevel, optional
+            Auto re-gate trigger level.  Defaults to ActionLevel.CRITICAL.
+        max_propagation_depth : int or None
+            Maximum propagation hops.  None = unlimited.
+
+        Returns
+        -------
+        TrustContext or None
+            None if the gate did not pass.
+        """
+        from .trust_alignment import TrustAlignmentCheck, GateMode as _GateMode
+        from .trust_context import TrustContext, ActionLevel
+
+        if gate_mode is None:
+            gate_mode = _GateMode.STRICT
+        if critical_action_threshold is None:
+            critical_action_threshold = ActionLevel.CRITICAL
+
+        check  = TrustAlignmentCheck(dimensions=dimensions, gate_mode=gate_mode)
+        result = check.evaluate(target_id)
+
+        if not result.gate_passed:
+            return None
+
+        return TrustContext.establish(
+            established_by            = self.agent_id,
+            alignment_result          = result,
+            alignment_check           = check,
+            valid_for_seconds         = valid_for_seconds,
+            critical_action_threshold = critical_action_threshold,
+            max_propagation_depth     = max_propagation_depth,
+        )
+
+    def handle_regate(
+        self,
+        context: object,
+        target_id: str,
+        valid_for_seconds: int = 3600,
+    ) -> Optional[object]:
+        """
+        Handle a re-gate request from a sub-agent.
+
+        Re-runs the original TrustAlignmentCheck.  Returns a fresh
+        TrustContext if the gate passes again, or None if it fails.
+
+        Part of PACT-AX trust infrastructure.
+        Safety is a moment. Trust is duration.
+
+        Parameters
+        ----------
+        context : TrustContext
+            The context that requested re-gating.
+        target_id : str
+            The agent to re-evaluate.
+        valid_for_seconds : int
+            TTL for the new context.  Default 3600.
+
+        Returns
+        -------
+        TrustContext or None
+        """
+        from .trust_context import TrustContext
+
+        check  = context.request_regate()
+        result = check.evaluate(target_id)
+
+        if not result.gate_passed:
+            return None
+
+        return TrustContext.establish(
+            established_by            = self.agent_id,
+            alignment_result          = result,
+            alignment_check           = check,
+            valid_for_seconds         = valid_for_seconds,
+            critical_action_threshold = context.critical_action_threshold,
+            max_propagation_depth     = context.max_propagation_depth,
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
     def _dominant_trend(
         self, evolutions: Dict[ContextType, TrustEvolution]
     ) -> str:

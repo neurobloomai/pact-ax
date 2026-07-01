@@ -269,6 +269,7 @@ class StateTransferManager:
         story_keeper=None,
         trust_manager=None,
         trust_chain_manager=None,
+        trust_context=None,
         trust_floor: float = 0.3,
         packet_ttl_minutes: int = 120,
     ) -> None:
@@ -276,6 +277,7 @@ class StateTransferManager:
         self.story_keeper         = story_keeper
         self.trust_manager        = trust_manager        # TrustManager instance or None
         self.trust_chain_manager  = trust_chain_manager  # TrustChainManager instance or None
+        self.trust_context        = trust_context        # TrustContext instance or None
         self.trust_floor          = trust_floor
         self.packet_ttl_minutes   = packet_ttl_minutes
 
@@ -423,6 +425,28 @@ class StateTransferManager:
                     )
             except Exception as exc:
                 logger.warning("TrustChainManager check failed: %s", exc)
+
+        # ── TrustContext scope check ──────────────────────────────────────────
+        if self.trust_context is not None:
+            try:
+                from pact_ax.primitives.trust_context import Action, ActionLevel
+                receive_action = Action("receive_handoff", ActionLevel.MEDIUM)
+                if not self.trust_context.check_action_permitted(receive_action):
+                    reason = "regate_required" if self.trust_context.regate_required else "out_of_scope"
+                    return TrustGateResult(
+                        sender_trust        = real_score,
+                        sender_trust_source = source,
+                        passed              = False,
+                        chain_verified      = chain_verified,
+                        chain_trust         = chain_trust,
+                        chain_state         = chain_state,
+                        rejection_reason    = (
+                            f"TrustContext check failed for receive_handoff: {reason} "
+                            f"(context={self.trust_context.context_id[:8]})"
+                        ),
+                    )
+            except Exception as exc:
+                logger.warning("TrustContext scope check failed (non-fatal): %s", exc)
 
         return TrustGateResult(
             sender_trust        = real_score,
@@ -906,6 +930,7 @@ class StateTransferManager:
             "trust_floor":             self.trust_floor,
             "trust_manager_wired":     self.trust_manager is not None,
             "trust_chain_wired":       self.trust_chain_manager is not None,
+            "trust_context_wired":     self.trust_context is not None,
         }
 
     # ── Convenience / backward-compat wrappers ───────────────────────────────

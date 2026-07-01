@@ -9,6 +9,8 @@ from pact_ax.state import StateTransferManager, HandoffReason, HandoffPacket, Tr
 from .context_share import ContextShareManager, ContextType, TrustLevel, Priority
 from .trust_score import TrustManager
 from .trust_chain import TrustChainManager, TrustChain, ChainHop, ChainState, ChainScore, ChainVerification
+from .trust_alignment import TrustAlignmentCheck, TrustDimension, DimensionScore, AlignmentResult, GateMode
+from .trust_context import TrustContext, TrustScope, TrustOperatingMode, DimensionBreak, Action, ActionLevel
 from .capability_registry import CapabilityRegistry, Capability
 from .agent_router import AgentRouter, RouteDecision, RouteCandidate
 from .dead_letter_queue import DeadLetterQueue, DLQEntry, DLQStatus
@@ -30,6 +32,19 @@ __all__ = [
     "Priority",
     # Trust scoring
     "TrustManager",
+    # Trust alignment (n/n gate)
+    "TrustAlignmentCheck",
+    "TrustDimension",
+    "DimensionScore",
+    "AlignmentResult",
+    "GateMode",
+    # Trust context (scoped propagatable contract)
+    "TrustContext",
+    "TrustScope",
+    "TrustOperatingMode",
+    "DimensionBreak",
+    "Action",
+    "ActionLevel",
     # Capability discovery
     "CapabilityRegistry",
     "Capability",

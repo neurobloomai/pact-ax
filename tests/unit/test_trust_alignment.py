@@ -17,6 +17,9 @@ Covers:
   - TrustIntent: non-load-bearing constraint may be dropped
   - TrustIntent: no intent in child violates all load-bearing constraints
   - TrustIntent: MASI-class failure pattern (constraint lived in delegator's head)
+  - OrientationDrift: mode_of_engagement drift fails n/n strict gate
+  - OrientationDrift: stable mode never triggers spurious failures
+  - OrientationDrift: full lifecycle — drift detected → signal_break → regate
 """
 
 import pytest
@@ -695,3 +698,119 @@ class TestTrustIntent:
             signaled_by="scanner-agent",
         )
         assert child.regate_required is True
+
+
+# ── OrientationDrift ───────────────────────────────────────────────────────────
+
+class TestOrientationDrift:
+    """
+    3b: mode_of_engagement as a declared dimension in TrustAlignmentCheck.
+
+    Orientation (advisory vs. executive, read-only vs. write, etc.) is one
+    of the n dimensions the caller declares. When the agent's observed mode
+    drifts from the declared mode at establishment time, that single dimension
+    scores 0.0. Under STRICT n/n, one failure fails the whole gate.
+
+    The evaluator is a closure — it captures the declared mode and reads the
+    agent's observable state. No new types needed; TrustDimension's evaluator
+    interface is the extension point.
+    """
+
+    def test_mode_drift_fails_strict_gate(self):
+        """
+        n=3 check: behavioral + capability + mode_of_engagement.
+        Declared mode is "advisory". When agent shifts to "executive",
+        mode_of_engagement scores 0.0 → gate_passed False, and
+        weakest_dimension is mode_of_engagement.
+        """
+        declared_mode = "advisory"
+        agent_state   = {"mode": "advisory"}   # mutable: simulates observable state
+
+        def mode_evaluator(agent_id: str) -> float:
+            return 1.0 if agent_state["mode"] == declared_mode else 0.0
+
+        dims = [
+            TrustDimension("behavioral_consistency", "Stability",        _const(0.85), threshold=0.70),
+            TrustDimension("capability_coherence",   "Coherence",        _const(0.80), threshold=0.70),
+            TrustDimension("mode_of_engagement",     "Advisory vs exec", mode_evaluator, threshold=0.90),
+        ]
+        check = TrustAlignmentCheck(dimensions=dims)
+
+        # Initial gate: mode is advisory — all 3 pass
+        result = check.evaluate("agent-x")
+        assert result.gate_passed is True
+        assert result.aligned == 3
+
+        # Mode drifts while task is in flight
+        agent_state["mode"] = "executive"
+
+        # Re-gate (or continuity monitor re-runs the same check):
+        result_after = check.evaluate("agent-x")
+        assert result_after.gate_passed is False
+        assert result_after.aligned == 2                                          # behavioral + capability pass
+        assert result_after.breakdown["mode_of_engagement"].passed is False
+        assert result_after.weakest_dimension.name == "mode_of_engagement"
+
+    def test_mode_alignment_survives_same_mode(self):
+        """
+        Mode never drifts → mode_of_engagement continues to pass on every
+        re-evaluation. No spurious failures.
+        """
+        declared_mode = "advisory"
+        agent_state   = {"mode": "advisory"}
+
+        def mode_evaluator(agent_id: str) -> float:
+            return 1.0 if agent_state["mode"] == declared_mode else 0.0
+
+        dims = [
+            TrustDimension("behavioral_consistency", "Stability",        _const(0.85), threshold=0.70),
+            TrustDimension("mode_of_engagement",     "Advisory vs exec", mode_evaluator, threshold=0.90),
+        ]
+        check = TrustAlignmentCheck(dimensions=dims)
+
+        r1 = check.evaluate("agent-x")
+        r2 = check.evaluate("agent-x")
+        assert r1.gate_passed is True
+        assert r2.gate_passed is True
+
+    def test_mode_drift_triggers_regate_via_signal_break(self):
+        """
+        Full lifecycle: gate established, sub-agent monitors mode,
+        drift detected on re-evaluation → signal_break() → regate_required.
+
+        The alignment check is not a live monitor — it re-evaluates on demand.
+        TrustContext.signal_break() is the continuity hook that links detected
+        drift to the re-gate lifecycle.
+        """
+        declared_mode = "advisory"
+        agent_state   = {"mode": "advisory"}
+
+        def mode_evaluator(agent_id: str) -> float:
+            return 1.0 if agent_state["mode"] == declared_mode else 0.0
+
+        dims = [
+            TrustDimension("behavioral_consistency", "Stability",        _const(0.85), threshold=0.70),
+            TrustDimension("capability_coherence",   "Coherence",        _const(0.80), threshold=0.70),
+            TrustDimension("mode_of_engagement",     "Advisory vs exec", mode_evaluator, threshold=0.90),
+        ]
+        check  = TrustAlignmentCheck(dimensions=dims)
+        result = check.evaluate("orchestrator")
+        assert result.gate_passed is True
+
+        ctx   = TrustContext.establish("orchestrator", result, check)
+        child = ctx.propagate(to_agent="agent-x")
+        assert child.regate_required is False
+
+        # Mode drifts mid-task — sub-agent re-runs check and detects it
+        agent_state["mode"] = "executive"
+        continuity_result   = check.evaluate("agent-x")
+        if not continuity_result.breakdown["mode_of_engagement"].passed:
+            child.signal_break(
+                "mode_of_engagement",
+                f"mode drifted from '{declared_mode}' to '{agent_state['mode']}'",
+                signaled_by="agent-x",
+            )
+
+        assert child.regate_required is True
+        assert len(child.break_signals) == 1
+        assert child.break_signals[0].dimension == "mode_of_engagement"

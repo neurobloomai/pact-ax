@@ -33,6 +33,16 @@ Reference dimensions (not hardcoded — caller provides their own):
     capability_coherence    — declared vs actual performance
     relational_history      — interaction ledger (feeds from RLP-0)
     network_corroboration   — third-party agent trust signals
+    mode_of_engagement      — orientation drift (advisory vs. executive,
+                              read-only vs. write, explore vs. build);
+                              evaluator returns 1.0 when observed mode
+                              matches declared mode, 0.0 on drift — a
+                              single drift fails the STRICT n/n gate
+
+The mode_of_engagement example illustrates *why dimensions are never
+hardcoded*: no framework author could predict which orientation dimensions
+matter for a given collaboration — only the caller knows.  The engine is
+the invariant; n is the variable.
 
 Usage
 -----

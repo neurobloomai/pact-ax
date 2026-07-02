@@ -81,6 +81,36 @@ PACT-AX operates at the actual trust layer: duration, not moment.
 
 ---
 
+## Why current agent networks work — and where they stop
+
+Today's orchestrator/subagent patterns (Claude Code, LangGraph-style, CrewAI)
+succeed because they are **stars, not meshes**:
+
+- Subagents cannot talk to each other
+- Nothing persists beyond the task
+- Everything routes through one synthesizer audited by one human
+
+Trust is never encoded — it is implied by topology. The human root *is* the
+trust substrate. That is why it works, and that is exactly why it stops working
+at scale.
+
+Every implicit guarantee evaporates at the star→mesh transition: agents from
+different owners, sessions, and organizations, with no shared human root, no
+shared lineage, no mechanism to verify that a delegated agent still carries the
+intent it was issued. The star is doing PACT's job by brute force. It works
+until one human's working memory can no longer be the substrate.
+
+That transition is where PACT-AX begins.
+
+| Gap in star topology | PACT-AX primitive |
+|---|---|
+| Stale authorization ("token says you were trusted") | `TrustAlignmentCheck` — continuous n/n gate, not a T=0 snapshot |
+| Unscoped context dumping between agents | `TrustContext` — scoped, propagatable intent-preservation contracts |
+| Assumed alignment via shared lineage | `TrustIntent` — load-bearing constraints that travel with the delegation |
+| Silent intent decay per hop | `verify_intent_integrity()` — detects omissions and modifications downstream |
+
+---
+
 ## Architecture
 
 ```

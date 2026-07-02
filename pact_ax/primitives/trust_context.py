@@ -1,13 +1,30 @@
 """
-TrustContext: Scoped, propagatable trust contract for agent chains.
+TrustContext: Scoped, propagatable intent-preservation contract for agent chains.
 
 An orchestrator runs TrustAlignmentCheck (n/n gate), receives an
 AlignmentResult, and issues a TrustContext.  Sub-agents receive the
 context — they do NOT re-run TrustAlignmentCheck.  They operate within
 it, monitor within it, and escalate when it is exceeded.
 
+The contract carries not just *permission* but *purpose and load-bearing
+constraints*, so intent travels with the delegation instead of being
+reconstructed from prose at each hop.  Fidelity, not just authorization.
+
+"Prose is lossy. Contracts propagate."
+
 Key concepts
 ------------
+TrustIntent
+    Structured intent block carried by the context.  Declares purpose and
+    constraints[], each flagged load_bearing: True/False.  Load-bearing
+    constraints must survive every propagation hop verbatim — omission or
+    modification is detectable via verify_intent_integrity().
+
+TrustConstraint
+    A single constraint within a TrustIntent.  load_bearing=True means the
+    constraint must arrive unchanged at every downstream gate; False means
+    a sub-agent may legitimately narrow or drop it (re-scoping, not decay).
+
 TrustScope
     Derived from the AlignmentResult — not hardcoded.  Which dimensions
     aligned, and at what strength, determines which ActionLevels are
@@ -23,8 +40,8 @@ DimensionBreak
     from the alignment established at entry.
 
 TrustContext
-    The live contract.  Knows which operating mode it was created in.
-    Triggers REGATE automatically on:
+    The live intent-preservation contract.  Knows which operating mode it
+    was created in.  Triggers REGATE automatically on:
       - a dimension break signal
       - valid_until exceeded
       - a critical action threshold crossed
@@ -34,18 +51,38 @@ Usage
 -----
     # Orchestrator side
     from pact_ax.primitives.trust_alignment import TrustAlignmentCheck
-    from pact_ax.primitives.trust_context   import TrustContext, Action, ActionLevel
+    from pact_ax.primitives.trust_context   import (
+        TrustContext, TrustIntent, TrustConstraint, Action, ActionLevel
+    )
 
+    intent = TrustIntent(
+        purpose="scan UNIVERSE for MA proximity setups",
+        constraints=[
+            TrustConstraint(
+                key="delisted_tickers_invalid",
+                description="Delisted tickers must not appear in scan results",
+                load_bearing=True,
+            ),
+        ],
+    )
     check   = TrustAlignmentCheck(dimensions=my_dims)
     result  = check.evaluate("agent-x")
     context = TrustContext.establish(
         established_by    = "orchestrator-1",
         alignment_result  = result,
         alignment_check   = check,
+        intent            = intent,
     )
 
     # Sub-agent side
     child = context.propagate(to_agent="agent-x")
+
+    # Verify intent arrived intact before acting
+    violations = child.verify_intent_integrity(intent)
+    if violations:
+        child.signal_break("intent_integrity",
+                           f"load-bearing constraints dropped: {violations}")
+
     if child.check_action_permitted(Action("write_to_store", ActionLevel.HIGH)):
         ...
     else:

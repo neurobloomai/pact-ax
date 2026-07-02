@@ -66,6 +66,107 @@ if TYPE_CHECKING:
 AgentID = str
 
 
+# ── Intent payload ─────────────────────────────────────────────────────────────
+
+@dataclass
+class TrustConstraint:
+    """
+    A single constraint within a TrustIntent.
+
+    load_bearing=True  — must survive every propagation hop verbatim.
+                         Omission or modification in a child context is a
+                         detectable violation at any downstream gate.
+    load_bearing=False — may be narrowed or dropped by a sub-agent performing
+                         legitimate re-scoping.
+
+    Part of PACT-AX trust infrastructure.
+    Prose is lossy. Contracts propagate.
+    """
+
+    key:          str   # machine-readable identifier
+    description:  str   # human-readable statement of the constraint
+    load_bearing: bool  # True = must survive every hop; False = may be narrowed
+
+
+@dataclass
+class TrustIntent:
+    """
+    Structured intent block carried by a TrustContext.
+
+    Carries not just permission but purpose and load-bearing constraints,
+    so intent travels with the delegation instead of being reconstructed
+    from prose at each hop.  Fidelity, not just authorization.
+
+    Usage
+    -----
+        intent = TrustIntent(
+            purpose="scan UNIVERSE for MA proximity setups",
+            constraints=[
+                TrustConstraint(
+                    key="delisted_tickers_invalid",
+                    description="Delisted tickers must not appear in scan results",
+                    load_bearing=True,
+                ),
+                TrustConstraint(
+                    key="band_width_3pct",
+                    description="MA proximity band is -3% to +3%",
+                    load_bearing=False,   # sub-agent may narrow this
+                ),
+            ],
+        )
+
+    Part of PACT-AX trust infrastructure.
+    Prose is lossy. Contracts propagate.
+    """
+
+    purpose:     str
+    constraints: List[TrustConstraint] = field(default_factory=list)
+
+    def load_bearing_constraints(self) -> List[TrustConstraint]:
+        """Return only constraints marked load_bearing=True."""
+        return [c for c in self.constraints if c.load_bearing]
+
+    def verify_preserved_in(self, child_intent: "TrustIntent") -> List[str]:
+        """
+        Check that every load-bearing constraint in self appears verbatim
+        in child_intent.
+
+        Returns a list of violated constraint keys — empty means intact.
+        A violation occurs when a load-bearing constraint is absent from
+        child_intent or its description has been modified.
+
+        Part of PACT-AX trust infrastructure.
+        Prose is lossy. Contracts propagate.
+        """
+        child_by_key = {c.key: c for c in child_intent.constraints}
+        violations = []
+        for c in self.load_bearing_constraints():
+            if c.key not in child_by_key:
+                violations.append(c.key)
+            elif child_by_key[c.key].description != c.description:
+                violations.append(c.key)
+        return violations
+
+    def to_dict(self) -> dict:
+        """
+        Serialisable snapshot.
+
+        Part of PACT-AX trust infrastructure.
+        Prose is lossy. Contracts propagate.
+        """
+        return {
+            "purpose": self.purpose,
+            "constraints": [
+                {
+                    "key":          c.key,
+                    "description":  c.description,
+                    "load_bearing": c.load_bearing,
+                }
+                for c in self.constraints
+            ],
+        }
+
+
 # ── Enums ──────────────────────────────────────────────────────────────────────
 
 class ActionLevel(str, Enum):
@@ -256,6 +357,7 @@ class TrustContext:
         critical_action_threshold:   ActionLevel = ActionLevel.CRITICAL,
         propagation_depth:           int = 0,
         max_propagation_depth:       Optional[int] = None,
+        intent:                      Optional[TrustIntent] = None,
     ) -> None:
         """
         Initialise a TrustContext.
@@ -273,6 +375,7 @@ class TrustContext:
         self.critical_action_threshold = critical_action_threshold
         self.propagation_depth         = propagation_depth
         self.max_propagation_depth     = max_propagation_depth
+        self.intent:                   Optional[TrustIntent] = intent
         self.break_signals: List[DimensionBreak] = []
         self._regate_required: bool = False
 
@@ -287,6 +390,7 @@ class TrustContext:
         valid_for_seconds:         int = 3600,
         critical_action_threshold: ActionLevel = ActionLevel.CRITICAL,
         max_propagation_depth:     Optional[int] = None,
+        intent:                    Optional[TrustIntent] = None,
     ) -> "TrustContext":
         """
         Issue a new TrustContext after a successful n/n alignment gate.
@@ -325,6 +429,7 @@ class TrustContext:
             critical_action_threshold = critical_action_threshold,
             propagation_depth         = 0,
             max_propagation_depth     = max_propagation_depth,
+            intent                    = intent,
         )
 
     # ── Sub-agent API ──────────────────────────────────────────────────────────
@@ -361,6 +466,7 @@ class TrustContext:
             critical_action_threshold = self.critical_action_threshold,
             propagation_depth         = new_depth,
             max_propagation_depth     = self.max_propagation_depth,
+            intent                    = self.intent,
         )
         if self.max_propagation_depth is not None and new_depth > self.max_propagation_depth:
             child._regate_required = True
@@ -376,14 +482,15 @@ class TrustContext:
         Part of PACT-AX trust infrastructure.
         Safety is a moment. Trust is duration.
         """
-        self.established_by       = context.established_by
-        self.alignment_at_entry   = context.alignment_at_entry
-        self.scope                = context.scope
-        self._alignment_check     = context._alignment_check
-        self.operating_mode       = TrustOperatingMode.CONTINUITY
-        self.valid_until          = context.valid_until
-        self.propagation_depth    = context.propagation_depth + 1
+        self.established_by        = context.established_by
+        self.alignment_at_entry    = context.alignment_at_entry
+        self.scope                 = context.scope
+        self._alignment_check      = context._alignment_check
+        self.operating_mode        = TrustOperatingMode.CONTINUITY
+        self.valid_until           = context.valid_until
+        self.propagation_depth     = context.propagation_depth + 1
         self.max_propagation_depth = context.max_propagation_depth
+        self.intent                = context.intent
 
         if (
             self.max_propagation_depth is not None
@@ -474,6 +581,35 @@ class TrustContext:
         # Scope check
         return self.scope.permits(action)
 
+    def verify_intent_integrity(self, parent_intent: TrustIntent) -> List[str]:
+        """
+        Check that this context's intent preserves all load-bearing constraints
+        from parent_intent.
+
+        Returns a list of violated constraint keys — empty means intact.
+        If this context carries no intent, every load-bearing constraint from
+        parent_intent is reported as violated.
+
+        Typical call site: immediately after receive_context(), to detect
+        intent decay introduced at this hop before acting on the context.
+
+        Example
+        -------
+            violations = child.verify_intent_integrity(parent.intent)
+            if violations:
+                child.signal_break(
+                    "intent_integrity",
+                    f"load-bearing constraints dropped: {violations}",
+                    signaled_by=self_agent_id,
+                )
+
+        Part of PACT-AX trust infrastructure.
+        Prose is lossy. Contracts propagate.
+        """
+        if self.intent is None:
+            return [c.key for c in parent_intent.load_bearing_constraints()]
+        return parent_intent.verify_preserved_in(self.intent)
+
     def request_regate(self) -> "TrustAlignmentCheck":
         """
         Return the original TrustAlignmentCheck, ready for re-evaluation.
@@ -527,6 +663,7 @@ class TrustContext:
             "break_signals":             len(self.break_signals),
             "scope":                     self.scope.to_dict(),
             "alignment_at_entry":        self.alignment_at_entry.to_dict(),
+            "intent":                    self.intent.to_dict() if self.intent else None,
         }
 
     def __repr__(self) -> str:

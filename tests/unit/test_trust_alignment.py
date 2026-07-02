@@ -12,6 +12,11 @@ Covers:
   - Dimension break signal: sub-agent signals, context flags
   - Auto re-gate trigger: valid_until exceeded → re-gate triggered
   - StateTransferManager trust gate: transfer blocked without valid context
+  - TrustIntent: intent payload survives propagation
+  - TrustIntent: load-bearing constraint violation detected at hop
+  - TrustIntent: non-load-bearing constraint may be dropped
+  - TrustIntent: no intent in child violates all load-bearing constraints
+  - TrustIntent: MASI-class failure pattern (constraint lived in delegator's head)
 """
 
 import pytest
@@ -31,6 +36,8 @@ from pact_ax.primitives.trust_context import (
     DimensionBreak,
     Action,
     ActionLevel,
+    TrustIntent,
+    TrustConstraint,
 )
 from pact_ax.state import StateTransferManager, HandoffReason
 
@@ -498,3 +505,193 @@ class TestStateTransferTrustContext:
     def test_summary_reports_context_not_wired(self):
         mgr = StateTransferManager(agent_id="agent-b")
         assert mgr.summary()["trust_context_wired"] is False
+
+
+# ── TrustIntent ────────────────────────────────────────────────────────────────
+
+def _intent_fixture() -> TrustIntent:
+    """Shared intent used across TestTrustIntent cases."""
+    return TrustIntent(
+        purpose="scan UNIVERSE for MA proximity setups",
+        constraints=[
+            TrustConstraint(
+                key="delisted_tickers_invalid",
+                description="Delisted tickers must not appear in scan results",
+                load_bearing=True,
+            ),
+            TrustConstraint(
+                key="band_width_3pct",
+                description="MA proximity band is -3% to +3%",
+                load_bearing=False,
+            ),
+        ],
+    )
+
+
+def _context_with_intent(intent: TrustIntent) -> TrustContext:
+    """Issue a TrustContext carrying the given intent."""
+    dims = [
+        TrustDimension("behavioral_consistency", "Stability", _const(0.85), threshold=0.70),
+        TrustDimension("capability_coherence",   "Coherence", _const(0.80), threshold=0.70),
+        TrustDimension("relational_history",     "History",   _const(0.75), threshold=0.70),
+    ]
+    check  = TrustAlignmentCheck(dimensions=dims)
+    result = check.evaluate("orchestrator-1")
+    return TrustContext.establish(
+        established_by    = "orchestrator-1",
+        alignment_result  = result,
+        alignment_check   = check,
+        intent            = intent,
+    )
+
+
+class TestTrustIntent:
+    def test_intent_survives_propagation(self):
+        """Intent on parent appears unchanged in child after propagate()."""
+        intent  = _intent_fixture()
+        parent  = _context_with_intent(intent)
+        child   = parent.propagate(to_agent="scanner-agent")
+
+        assert child.intent is not None
+        assert child.intent.purpose == intent.purpose
+        assert len(child.intent.constraints) == 2
+
+    def test_intent_survives_receive_context(self):
+        """Intent is copied when a sub-agent receives via receive_context()."""
+        intent   = _intent_fixture()
+        parent   = _context_with_intent(intent)
+        receiver = _context_with_intent(TrustIntent(purpose="placeholder"))
+        receiver.receive_context(parent)
+
+        assert receiver.intent is not None
+        assert receiver.intent.purpose == intent.purpose
+
+    def test_load_bearing_constraint_violation_detected(self):
+        """
+        Child intent is missing a load-bearing constraint →
+        verify_intent_integrity() returns its key.
+        """
+        parent_intent = _intent_fixture()
+        parent        = _context_with_intent(parent_intent)
+        child         = parent.propagate(to_agent="scanner-agent")
+
+        # Simulate a hop that dropped the load-bearing constraint
+        child.intent = TrustIntent(
+            purpose="scan UNIVERSE",
+            constraints=[
+                TrustConstraint(
+                    key="band_width_3pct",
+                    description="MA proximity band is -3% to +3%",
+                    load_bearing=False,
+                ),
+            ],
+        )
+
+        violations = child.verify_intent_integrity(parent_intent)
+        assert "delisted_tickers_invalid" in violations
+
+    def test_non_load_bearing_constraint_can_be_dropped(self):
+        """
+        Child intent drops a non-load-bearing constraint →
+        verify_intent_integrity() reports no violations.
+        """
+        parent_intent = _intent_fixture()
+        parent        = _context_with_intent(parent_intent)
+        child         = parent.propagate(to_agent="scanner-agent")
+
+        # Sub-agent narrowed scope: dropped the non-load-bearing band constraint
+        child.intent = TrustIntent(
+            purpose="scan UNIVERSE for MA proximity setups",
+            constraints=[
+                TrustConstraint(
+                    key="delisted_tickers_invalid",
+                    description="Delisted tickers must not appear in scan results",
+                    load_bearing=True,
+                ),
+            ],
+        )
+
+        violations = child.verify_intent_integrity(parent_intent)
+        assert violations == []
+
+    def test_no_intent_in_child_violates_all_load_bearing(self):
+        """
+        Child carries no intent at all → every load-bearing constraint is
+        reported as violated.
+        """
+        parent_intent = _intent_fixture()
+        parent        = _context_with_intent(parent_intent)
+        child         = parent.propagate(to_agent="scanner-agent")
+        child.intent  = None
+
+        violations = child.verify_intent_integrity(parent_intent)
+        assert "delisted_tickers_invalid" in violations
+        assert len(violations) == 1  # only one load-bearing constraint in fixture
+
+    def test_intent_in_to_dict(self):
+        """intent block appears in to_dict() output when set."""
+        intent  = _intent_fixture()
+        context = _context_with_intent(intent)
+        d       = context.to_dict()
+
+        assert d["intent"] is not None
+        assert d["intent"]["purpose"] == intent.purpose
+        assert len(d["intent"]["constraints"]) == 2
+
+    def test_no_intent_to_dict_is_none(self):
+        """intent is None in to_dict() when not provided."""
+        dims = [
+            TrustDimension("behavioral_consistency", "Stability", _const(0.85), threshold=0.70),
+        ]
+        check   = TrustAlignmentCheck(dimensions=dims)
+        result  = check.evaluate("orchestrator-1")
+        context = TrustContext.establish(
+            established_by   = "orchestrator-1",
+            alignment_result = result,
+            alignment_check  = check,
+        )
+        assert context.to_dict()["intent"] is None
+
+    def test_masi_class_failure_pattern(self):
+        """
+        MASI-class failure: a constraint lived only in the delegator's head,
+        never in anything propagatable — the downstream agent had no mechanism
+        to know it existed.
+
+        This test proves the fix: the constraint is declared in the intent,
+        propagated to the child, and its absence is detectable.
+        """
+        # Orchestrator knows: delisted tickers must not appear in results
+        parent_intent = TrustIntent(
+            purpose="run MA scanner on UNIVERSE",
+            constraints=[
+                TrustConstraint(
+                    key="delisted_tickers_invalid",
+                    description="Delisted tickers must not appear in scan results",
+                    load_bearing=True,
+                ),
+            ],
+        )
+        parent = _context_with_intent(parent_intent)
+
+        # Sub-agent receives context — intent arrives intact
+        child = parent.propagate(to_agent="scanner-agent")
+        assert child.verify_intent_integrity(parent_intent) == []
+
+        # Sub-agent (or a further hop) silently drops the constraint
+        child.intent = TrustIntent(
+            purpose="run MA scanner on UNIVERSE",
+            constraints=[],   # constraint dropped — constraint lived only in prose
+        )
+
+        # Now detectable — this is what was invisible before
+        violations = child.verify_intent_integrity(parent_intent)
+        assert violations == ["delisted_tickers_invalid"]
+
+        # Sub-agent should signal a break when it detects the violation
+        child.signal_break(
+            "intent_integrity",
+            f"load-bearing constraints dropped: {violations}",
+            signaled_by="scanner-agent",
+        )
+        assert child.regate_required is True

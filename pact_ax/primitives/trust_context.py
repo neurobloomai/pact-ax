@@ -91,6 +91,8 @@ Usage
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
@@ -184,6 +186,47 @@ class TrustIntent:
                 violations.append(c.key)
         return violations
 
+    def canonical_json(self) -> str:
+        """
+        Deterministic JSON serialisation of this intent.
+
+        Constraints are sorted by key so serialisation is stable regardless
+        of insertion order.  Used as the input to content_hash().
+
+        Part of PACT-AX trust infrastructure.
+        Intent is referenced, never reconstructed.
+        """
+        return json.dumps(
+            {
+                "purpose": self.purpose,
+                "constraints": sorted(
+                    [
+                        {
+                            "key":          c.key,
+                            "description":  c.description,
+                            "load_bearing": c.load_bearing,
+                        }
+                        for c in self.constraints
+                    ],
+                    key=lambda x: x["key"],
+                ),
+            },
+            sort_keys=True,
+        )
+
+    def content_hash(self) -> str:
+        """
+        SHA-256 of the canonical serialisation.
+
+        Computed from canonical_json() — stable across hops as long as the
+        intent object is passed by reference (not re-serialised from prose).
+        A hash mismatch at any hop means reconstruction occurred.
+
+        Part of PACT-AX trust infrastructure.
+        Intent is referenced, never reconstructed.
+        """
+        return hashlib.sha256(self.canonical_json().encode()).hexdigest()
+
     def to_dict(self) -> dict:
         """
         Serialisable snapshot.
@@ -202,6 +245,26 @@ class TrustIntent:
                 for c in self.constraints
             ],
         }
+
+
+# ── Scope delta ────────────────────────────────────────────────────────────────
+
+@dataclass
+class ScopeDelta:
+    """
+    An explicit, append-only narrowing record for a single propagation hop.
+
+    Intermediaries declare what they are dropping and why — they never mutate
+    origin_intent.  Dropping a load_bearing constraint is rejected at append
+    time by TrustContext.add_scope_delta().
+
+    Part of PACT-AX trust infrastructure.
+    Intent is referenced, never reconstructed.
+    """
+
+    hop_id:              str         # agent or hop identifier applying this narrowing
+    narrowed_scope:      str         # human-readable description of the narrowing
+    constraints_dropped: List[str]   # keys of constraints dropped at this hop
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────────
@@ -349,15 +412,38 @@ class TrustScope:
 
 class TrustContext:
     """
-    Scoped, propagatable trust contract that flows through agent chains.
+    Scoped, propagatable intent-preservation contract for agent chains.
+
+    TrustContext is an intent-preservation contract, not just an authorization
+    contract.  It carries not only *permission* but *origin purpose and
+    load-bearing constraints*, so intent travels with the delegation instead
+    of being reconstructed from prose at each hop.
+
+    Doctrine: **Intent is referenced, never reconstructed.**
 
     Created by an orchestrator after a successful TrustAlignmentCheck.
     Sub-agents receive it via propagate(), operate within its scope, signal
     breaks when they detect divergence, and request a re-gate when a break
     or expiry demands a fresh n/n evaluation.
 
+    Intent preservation primitives
+    --------------------------------
+    origin_intent   Immutable anchor set at establish().  Carried verbatim
+                    through every propagation hop.  Never re-serialised.
+    origin_hash     SHA-256 of origin_intent at establishment.  A mismatch at
+                    any hop means reconstruction occurred — mechanically
+                    detectable without semantic comparison.
+    scope_deltas    Append-only list of ScopeDelta records.  Intermediaries
+                    declare explicit narrowings here; they never mutate
+                    origin_intent.  Dropping a load_bearing constraint is
+                    rejected at append time.
+    effective_constraints()
+                    Returns origin constraints minus all dropped keys from
+                    accumulated deltas — the operating constraint set at this hop.
+
     Part of PACT-AX trust infrastructure.
     Safety is a moment. Trust is duration.
+    Intent is referenced, never reconstructed.
 
     Parameters
     ----------
@@ -415,6 +501,15 @@ class TrustContext:
         self.intent:                   Optional[TrustIntent] = intent
         self.break_signals: List[DimensionBreak] = []
         self._regate_required: bool = False
+        # ── Intent preservation ────────────────────────────────────────────────
+        # origin_intent is the immutable anchor set at establish() and carried
+        # forward verbatim.  intent (above) is the hop's operating intent and
+        # may be narrowed via scope_deltas.  The hash is computed once from
+        # origin_intent and never recomputed — a mismatch at any hop means
+        # reconstruction occurred.
+        self._origin_intent: Optional[TrustIntent] = intent
+        self._origin_hash:   Optional[str]         = intent.content_hash() if intent else None
+        self._scope_deltas:  List[ScopeDelta]      = []
 
     # ── Factory ────────────────────────────────────────────────────────────────
 
@@ -469,6 +564,89 @@ class TrustContext:
             intent                    = intent,
         )
 
+    # ── Intent preservation API ────────────────────────────────────────────────
+
+    @property
+    def origin_intent(self) -> Optional[TrustIntent]:
+        """
+        The immutable origin intent set at establishment.
+
+        Passed by reference through every hop — never re-serialised or
+        reconstructed.  A hash mismatch between origin_hash and
+        origin_intent.content_hash() at any hop is a fidelity violation.
+
+        Part of PACT-AX trust infrastructure.
+        Intent is referenced, never reconstructed.
+        """
+        return self._origin_intent
+
+    @property
+    def origin_hash(self) -> Optional[str]:
+        """
+        SHA-256 of the origin intent at establishment time.
+
+        Computed once.  Propagated unchanged.  Verifying that
+        origin_intent.content_hash() == origin_hash proves the intent
+        object was not reconstructed at any intermediate hop.
+
+        Part of PACT-AX trust infrastructure.
+        Intent is referenced, never reconstructed.
+        """
+        return self._origin_hash
+
+    def add_scope_delta(self, delta: ScopeDelta) -> None:
+        """
+        Append a scope narrowing record for this hop.
+
+        Enforces that no load_bearing constraint is dropped: if
+        constraints_dropped contains any key that is load_bearing in
+        origin_intent, the delta is rejected with ValueError.
+
+        Part of PACT-AX trust infrastructure.
+        Intent is referenced, never reconstructed.
+
+        Parameters
+        ----------
+        delta : ScopeDelta
+            The narrowing to record.
+
+        Raises
+        ------
+        ValueError
+            If constraints_dropped contains a load_bearing constraint key.
+        """
+        if self._origin_intent is not None:
+            lb_keys = {c.key for c in self._origin_intent.load_bearing_constraints()}
+            dropped_lb = lb_keys & set(delta.constraints_dropped)
+            if dropped_lb:
+                raise ValueError(
+                    f"ScopeDelta rejected: cannot drop load_bearing constraints {dropped_lb}"
+                )
+        self._scope_deltas.append(delta)
+
+    def effective_constraints(self) -> List[TrustConstraint]:
+        """
+        Origin constraints minus all constraints dropped by accumulated deltas.
+
+        The effective set is what the current hop is operating with.
+        Load_bearing constraints are never in the dropped set (enforced at
+        add_scope_delta time).
+
+        Part of PACT-AX trust infrastructure.
+        Intent is referenced, never reconstructed.
+
+        Returns
+        -------
+        list of TrustConstraint
+            Constraints remaining after all scope narrowing.
+        """
+        if self._origin_intent is None:
+            return []
+        dropped: set = set()
+        for delta in self._scope_deltas:
+            dropped.update(delta.constraints_dropped)
+        return [c for c in self._origin_intent.constraints if c.key not in dropped]
+
     # ── Sub-agent API ──────────────────────────────────────────────────────────
 
     def propagate(self, to_agent: AgentID) -> "TrustContext":
@@ -505,6 +683,10 @@ class TrustContext:
             max_propagation_depth     = self.max_propagation_depth,
             intent                    = self.intent,
         )
+        # Carry origin anchor and accumulated deltas forward unchanged
+        child._origin_intent = self._origin_intent
+        child._origin_hash   = self._origin_hash
+        child._scope_deltas  = list(self._scope_deltas)
         if self.max_propagation_depth is not None and new_depth > self.max_propagation_depth:
             child._regate_required = True
         return child
@@ -528,6 +710,10 @@ class TrustContext:
         self.propagation_depth     = context.propagation_depth + 1
         self.max_propagation_depth = context.max_propagation_depth
         self.intent                = context.intent
+        # Carry origin anchor and accumulated deltas forward unchanged
+        self._origin_intent = context._origin_intent
+        self._origin_hash   = context._origin_hash
+        self._scope_deltas  = list(context._scope_deltas)
 
         if (
             self.max_propagation_depth is not None
@@ -701,6 +887,15 @@ class TrustContext:
             "scope":                     self.scope.to_dict(),
             "alignment_at_entry":        self.alignment_at_entry.to_dict(),
             "intent":                    self.intent.to_dict() if self.intent else None,
+            "origin_hash":               self._origin_hash,
+            "scope_deltas":              [
+                {
+                    "hop_id":              d.hop_id,
+                    "narrowed_scope":      d.narrowed_scope,
+                    "constraints_dropped": d.constraints_dropped,
+                }
+                for d in self._scope_deltas
+            ],
         }
 
     def __repr__(self) -> str:

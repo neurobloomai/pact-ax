@@ -41,6 +41,7 @@ from pact_ax.primitives.trust_context import (
     ActionLevel,
     TrustIntent,
     TrustConstraint,
+    ScopeDelta,
 )
 from pact_ax.state import StateTransferManager, HandoffReason
 
@@ -814,3 +815,317 @@ class TestOrientationDrift:
         assert child.regate_required is True
         assert len(child.break_signals) == 1
         assert child.break_signals[0].dimension == "mode_of_engagement"
+
+
+# ── Intent preservation: origin_hash + ScopeDelta ─────────────────────────────
+
+def _origin_intent_fixture() -> TrustIntent:
+    return TrustIntent(
+        purpose="validate market scanner output",
+        constraints=[
+            TrustConstraint(
+                key="delisted_tickers_invalid",
+                description="Delisted tickers must not appear in scan results",
+                load_bearing=True,
+            ),
+            TrustConstraint(
+                key="band_width_3pct",
+                description="MA proximity band is -3% to +3%",
+                load_bearing=False,
+            ),
+        ],
+    )
+
+
+def _ctx_with_origin(intent: TrustIntent) -> TrustContext:
+    dims  = [TrustDimension("d", "D", _const(0.9), threshold=0.5)]
+    check = TrustAlignmentCheck(dimensions=dims)
+    result = check.evaluate("orch")
+    return TrustContext.establish(
+        established_by   = "orch",
+        alignment_result = result,
+        alignment_check  = check,
+        intent           = intent,
+    )
+
+
+class TestOriginHash:
+    def test_origin_hash_set_at_establish(self):
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+        assert ctx.origin_hash is not None
+        assert ctx.origin_hash == intent.content_hash()
+
+    def test_origin_hash_survives_3_hops_byte_identical(self):
+        """Doctrine: origin_hash is unchanged across 3+ propagation hops."""
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+        h0     = ctx.origin_hash
+
+        hop1 = ctx.propagate("agent-1")
+        hop2 = hop1.propagate("agent-2")
+        hop3 = hop2.propagate("agent-3")
+
+        assert hop1.origin_hash == h0
+        assert hop2.origin_hash == h0
+        assert hop3.origin_hash == h0
+
+    def test_origin_intent_survives_3_hops_byte_identical(self):
+        """origin_intent object identity carries through — no copying of fields."""
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+
+        hop1 = ctx.propagate("agent-1")
+        hop2 = hop1.propagate("agent-2")
+        hop3 = hop2.propagate("agent-3")
+
+        # Re-hash at each hop must equal the original — content unchanged
+        assert hop1.origin_intent.content_hash() == intent.content_hash()
+        assert hop2.origin_intent.content_hash() == intent.content_hash()
+        assert hop3.origin_intent.content_hash() == intent.content_hash()
+
+    def test_reconstructed_intent_fails_hash_verification(self):
+        """
+        Doctrine test: if a hop re-serialises intent (even with same meaning
+        but different description wording), the hash fails.
+
+        This is the mechanical detection that makes reconstruction impossible
+        to hide — you cannot paraphrase your way through the gate.
+        """
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+        hop    = ctx.propagate("agent-1")
+
+        # Simulate a hop that re-serialised/paraphrased the load_bearing constraint
+        reconstructed = TrustIntent(
+            purpose="validate market scanner output",
+            constraints=[
+                TrustConstraint(
+                    key="delisted_tickers_invalid",
+                    description="Do not include delisted tickers",  # paraphrase
+                    load_bearing=True,
+                ),
+                TrustConstraint(
+                    key="band_width_3pct",
+                    description="MA proximity band is -3% to +3%",
+                    load_bearing=False,
+                ),
+            ],
+        )
+        hop._origin_intent = reconstructed  # tamper with private field
+
+        # Hash of reconstructed != original hash → fidelity violation
+        assert hop.origin_intent.content_hash() != ctx.origin_hash
+
+    def test_tampered_origin_hash_mismatch_detectable(self):
+        """A hop that changes origin_hash directly is detectable via recompute."""
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+        hop    = ctx.propagate("agent-1")
+
+        original_hash = hop.origin_hash
+        hop._origin_hash = "deadbeef" * 8  # tamper
+
+        # The recomputed hash from origin_intent still matches the true hash
+        assert hop.origin_intent.content_hash() == original_hash
+        # But origin_hash field no longer matches — detectable
+        assert hop.origin_hash != hop.origin_intent.content_hash()
+
+    def test_no_origin_intent_gives_none_hash(self):
+        """Backward compat: context without intent has None origin_hash."""
+        dims  = [TrustDimension("d", "D", _const(0.9), threshold=0.5)]
+        check = TrustAlignmentCheck(dimensions=dims)
+        result = check.evaluate("orch")
+        ctx = TrustContext.establish(
+            established_by   = "orch",
+            alignment_result = result,
+            alignment_check  = check,
+        )
+        assert ctx.origin_hash   is None
+        assert ctx.origin_intent is None
+
+
+class TestScopeDelta:
+    def test_non_load_bearing_drop_accepted(self):
+        """Dropping a non-load_bearing constraint via delta is legitimate narrowing."""
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+
+        delta = ScopeDelta(
+            hop_id              = "agent-1",
+            narrowed_scope      = "sub-agent only needs liquid names",
+            constraints_dropped = ["band_width_3pct"],  # non-load_bearing
+        )
+        ctx.add_scope_delta(delta)  # must not raise
+        assert len(ctx._scope_deltas) == 1
+
+    def test_load_bearing_drop_rejected_at_append(self):
+        """Dropping a load_bearing constraint is rejected immediately at add_scope_delta()."""
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+
+        delta = ScopeDelta(
+            hop_id              = "agent-1",
+            narrowed_scope      = "attempting to drop a load_bearing constraint",
+            constraints_dropped = ["delisted_tickers_invalid"],  # load_bearing!
+        )
+        with pytest.raises(ValueError, match="load_bearing"):
+            ctx.add_scope_delta(delta)
+
+        # Delta must not have been appended
+        assert len(ctx._scope_deltas) == 0
+
+    def test_load_bearing_drop_detectable_at_gate(self):
+        """
+        Belt-and-suspenders: even if add_scope_delta is bypassed and a
+        load_bearing key appears in _scope_deltas, effective_constraints()
+        would exclude it — and the structural fidelity dimension catches it.
+
+        We test effective_constraints() directly here (the belt).
+        The structural_fidelity_dimension test covers the gate (the suspenders).
+        """
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+
+        # Force the delta in without going through the guard (simulates bypass)
+        ctx._scope_deltas.append(
+            ScopeDelta(
+                hop_id              = "rogue-hop",
+                narrowed_scope      = "dropped load_bearing",
+                constraints_dropped = ["delisted_tickers_invalid"],
+            )
+        )
+
+        effective_keys = {c.key for c in ctx.effective_constraints()}
+        assert "delisted_tickers_invalid" not in effective_keys
+
+    def test_effective_constraints_removes_dropped(self):
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+
+        ctx.add_scope_delta(ScopeDelta(
+            hop_id="agent-1",
+            narrowed_scope="narrow band constraint",
+            constraints_dropped=["band_width_3pct"],
+        ))
+
+        effective = ctx.effective_constraints()
+        keys = [c.key for c in effective]
+        assert "delisted_tickers_invalid" in keys
+        assert "band_width_3pct"          not in keys
+
+    def test_scope_deltas_in_to_dict(self):
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+        ctx.add_scope_delta(ScopeDelta(
+            hop_id="agent-1",
+            narrowed_scope="narrowing",
+            constraints_dropped=["band_width_3pct"],
+        ))
+        d = ctx.to_dict()
+        assert len(d["scope_deltas"]) == 1
+        assert d["scope_deltas"][0]["hop_id"] == "agent-1"
+
+    def test_scope_deltas_propagate_to_child(self):
+        """Accumulated deltas carry forward on propagate()."""
+        intent = _origin_intent_fixture()
+        ctx    = _ctx_with_origin(intent)
+        ctx.add_scope_delta(ScopeDelta(
+            hop_id="agent-1",
+            narrowed_scope="first narrowing",
+            constraints_dropped=[],
+        ))
+        child = ctx.propagate("agent-2")
+        assert len(child._scope_deltas) == 1
+
+
+class TestStructuralFidelityDimension:
+    def _fidelity_ctx(self, intent):
+        """Issue a fresh context with intent; return (ctx, dim)."""
+        dims  = [TrustDimension("d", "D", _const(0.9), threshold=0.5)]
+        check = TrustAlignmentCheck(dimensions=dims)
+        result = check.evaluate("orch")
+        ctx = TrustContext.establish(
+            established_by   = "orch",
+            alignment_result = result,
+            alignment_check  = check,
+            intent           = intent,
+        )
+        dim = TrustAlignmentCheck.structural_fidelity_dimension(
+            origin_intent = intent,
+            origin_hash   = ctx.origin_hash,
+        )
+        return ctx, dim
+
+    def test_intact_origin_passes_gate(self):
+        """Hash matches + all load_bearing present → fidelity dimension scores 1.0."""
+        intent = _origin_intent_fixture()
+        ctx, dim = self._fidelity_ctx(intent)
+        hop = ctx.propagate("agent-1")
+
+        evaluator = dim.make_bound_evaluator(hop)
+        assert evaluator("agent-1") == pytest.approx(1.0)
+
+    def test_tampered_hash_fails_gate(self):
+        """origin_hash tampered → fidelity dimension scores 0.0."""
+        intent = _origin_intent_fixture()
+        ctx, dim = self._fidelity_ctx(intent)
+        hop = ctx.propagate("agent-1")
+        hop._origin_hash = "0" * 64  # tamper
+
+        evaluator = dim.make_bound_evaluator(hop)
+        assert evaluator("agent-1") == pytest.approx(0.0)
+
+    def test_reconstructed_intent_fails_gate(self):
+        """
+        Doctrine test via the gate: a hop that re-serialised intent instead of
+        referencing it is mechanically detectable — the hash fails.
+        """
+        intent = _origin_intent_fixture()
+        ctx, dim = self._fidelity_ctx(intent)
+        hop = ctx.propagate("agent-1")
+
+        # Re-serialise with paraphrased description
+        hop._origin_intent = TrustIntent(
+            purpose="validate market scanner output",
+            constraints=[
+                TrustConstraint(
+                    key="delisted_tickers_invalid",
+                    description="No delisted tickers allowed",  # paraphrase
+                    load_bearing=True,
+                ),
+            ],
+        )
+
+        evaluator = dim.make_bound_evaluator(hop)
+        assert evaluator("agent-1") == pytest.approx(0.0)
+
+    def test_missing_load_bearing_fails_gate(self):
+        """Load_bearing constraint dropped from effective scope → fidelity 0.0."""
+        intent = _origin_intent_fixture()
+        ctx, dim = self._fidelity_ctx(intent)
+        hop = ctx.propagate("agent-1")
+
+        # Force-drop load_bearing key from effective scope
+        hop._scope_deltas.append(ScopeDelta(
+            hop_id="rogue",
+            narrowed_scope="dropped load_bearing",
+            constraints_dropped=["delisted_tickers_invalid"],
+        ))
+
+        evaluator = dim.make_bound_evaluator(hop)
+        assert evaluator("agent-1") == pytest.approx(0.0)
+
+    def test_legitimate_narrowing_passes_gate(self):
+        """Non-load_bearing constraint dropped via delta → fidelity still 1.0."""
+        intent = _origin_intent_fixture()
+        ctx, dim = self._fidelity_ctx(intent)
+        hop = ctx.propagate("agent-1")
+        hop.add_scope_delta(ScopeDelta(
+            hop_id="agent-1",
+            narrowed_scope="sub-agent drops band constraint",
+            constraints_dropped=["band_width_3pct"],
+        ))
+
+        evaluator = dim.make_bound_evaluator(hop)
+        assert evaluator("agent-1") == pytest.approx(1.0)

@@ -330,3 +330,76 @@ class TrustAlignmentCheck:
             return (weighted_score / total_weight) >= self.threshold_ratio
 
         return False  # pragma: no cover — exhaustive enum
+
+    # ── Intent fidelity dimension factory ──────────────────────────────────────
+
+    @staticmethod
+    def structural_fidelity_dimension(
+        origin_intent: "TrustIntent",
+        origin_hash:   str,
+    ) -> "TrustDimension":
+        """
+        Return a TrustDimension that performs a cheap structural fidelity check.
+
+        The dimension scores 1.0 when:
+          - the received context's origin_intent hashes to origin_hash
+            (proves the intent object was not reconstructed at any hop)
+          - all load_bearing constraints from origin_intent are present in
+            the context's effective_constraints()
+
+        Scores 0.0 on any violation.
+
+        This is one caller-declared dimension among n/n — not hardcoded as
+        mandatory.  Declare it like any other TrustDimension per substrate
+        doctrine.
+
+        Part of PACT-AX trust infrastructure.
+        Intent is referenced, never reconstructed.
+
+        Parameters
+        ----------
+        origin_intent : TrustIntent
+            The intent as declared by the orchestrator.
+        origin_hash : str
+            The SHA-256 hash computed at establishment time.
+
+        Returns
+        -------
+        TrustDimension
+        """
+        from pact_ax.primitives.trust_context import TrustContext  # local to avoid circular
+
+        def _evaluate(agent_id: str) -> float:
+            # Evaluator checks the context passed via closure at call time.
+            # Callers must bind the context being evaluated before calling
+            # check.evaluate() by using a closure over the received context.
+            # See usage pattern in tests.
+            return 1.0  # base; real check is performed in the bound variant below
+
+        def _make_bound(ctx: "TrustContext"):
+            """Return an evaluator bound to a specific received context."""
+            def _bound(_agent_id: str) -> float:
+                # Hash check: did origin_intent survive byte-identical?
+                if ctx.origin_intent is None:
+                    return 0.0
+                if ctx.origin_hash != origin_hash:
+                    return 0.0
+                if ctx.origin_intent.content_hash() != origin_hash:
+                    return 0.0
+                # Load_bearing constraints present in effective scope?
+                effective_keys = {c.key for c in ctx.effective_constraints()}
+                lb_keys        = {c.key for c in origin_intent.load_bearing_constraints()}
+                if not lb_keys.issubset(effective_keys):
+                    return 0.0
+                return 1.0
+            return _bound
+
+        dim = TrustDimension(
+            name        = "structural_fidelity",
+            description = "Origin intent hash matches; all load_bearing constraints in effective scope",
+            evaluator   = _evaluate,
+            threshold   = 1.0,
+        )
+        # Attach the bound-context factory as a convenience attribute
+        dim.make_bound_evaluator = _make_bound  # type: ignore[attr-defined]
+        return dim

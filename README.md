@@ -102,6 +102,8 @@ until one human's working memory can no longer be the substrate.
 
 That transition is where PACT-AX begins.
 
+> **PACT-AX is model-agnostic by design.** Intent degradation is a property of hand-offs, not of any particular intelligence. Swap in GPT, Claude, a rule-based system, or a human intern at any hop — the degradation mechanics are identical, and so is the fix. LLMs are welcome; they are not required. The protocol layer does not care what runs on top of it.
+
 | Gap in star topology | PACT-AX primitive |
 |---|---|
 | Stale authorization ("token says you were trusted") | `TrustAlignmentCheck` — continuous n/n gate, not a T=0 snapshot |

@@ -134,6 +134,11 @@ The infrastructure we are building for agent trust is also, precisely, the infra
 that was missing from every other natural-language delegation system. That is not a feature.
 That is what it means for a solution to address the root cause.
 
+One implication worth stating explicitly: within the agent-chain substrate, the model is
+also not the variable. Replace the LLM at any node with GPT, Claude, a rule-based system,
+or a human intern — the decay mechanics are identical. PACT-AX does not solve an AI problem.
+It solves a delegation problem that AI made urgent, visible, and finally tractable to fix.
+
 ---
 
 *Part of the PACT-AX doctrine series — [neurobloom.ai](https://neurobloom.ai)*  

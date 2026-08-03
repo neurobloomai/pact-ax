@@ -19,6 +19,30 @@ on the second. PACT-AX is the answer to the second question.
 
 ---
 
+## Alignment seen is not alignment trusted. Alignment trusted is not trusted forever.
+
+Three distinct states that the industry collapses into one:
+
+**Alignment seen** — the agent behaved correctly at this checkpoint. Observation,
+not verification. Star topologies produce this continuously, which is why they feel
+safe. They are not encoding trust; they are witnessing it, one human checkpoint at a time.
+
+**Alignment trusted** — a mechanism exists to verify alignment, not just observe it.
+`TrustAlignmentCheck` is the implementation: a continuous n/n gate that evaluates
+declared dimensions — behavioral consistency, capability coherence, intent fidelity —
+rather than relying on a human to notice drift.
+
+**Trusted forever** — the silent assumption that a T=0 authorization persists
+indefinitely. Token delegation, signed credentials, initialization checks all answer
+"was this agent trusted when it joined?" They say nothing about whether it is still
+trustworthy now. At the star→mesh transition — cross-org agents, persistent sessions,
+no shared human root — this assumption is the first thing that breaks.
+
+PACT-AX operates between the second and third state: making trust continuous and
+re-evaluable, not a snapshot that silently decays into assumed permanence.
+
+---
+
 ## Prose is lossy. Contracts propagate.
 
 Intent passed as natural language degrades per hop — each agent re-summarizes,

@@ -52,6 +52,22 @@ is: do not mistake a patch for a design.
 
 ---
 
+## The protocol layer does not care what intelligence runs on top of it.
+
+Intent degradation is a property of hand-offs, not of any particular model or agent
+implementation. Swap in GPT, Claude, a rule-based system, or a human intern at any
+hop — the decay mechanics are identical, and so is the fix. The telephone game predates
+telephones.
+
+PACT-AX is substrate-invariant by design. LLMs are welcome. They are not the variable
+that determines whether intent survives delegation. The contract layer does.
+
+*Avoid*: framing PACT as "AI infrastructure" in a way that implies LLM dependency. The
+stronger claim — and the truer one — is that PACT solves a coordination problem that
+exists across every substrate that has ever delegated through hops.
+
+---
+
 ## Intent fidelity decays per hop; the human is the only error-correction mechanism — today.
 
 The precise, defensible form of the intent-decay claim. Observable now, in

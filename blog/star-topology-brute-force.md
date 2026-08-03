@@ -98,6 +98,12 @@ None of this requires replacing star topologies. It is additive to them. What it
 make the implicit guarantee of the star topology *explicit* — so it survives the moment the
 star topology doesn't.
 
+One more thing worth stating plainly: **none of this is about LLMs**. Swap in GPT, Claude,
+a rule-based system, or a human intern at any hop — the intent-decay mechanics are identical,
+and so is the fix. The telephone game predates telephones. PACT-AX is model-agnostic by
+design, because the problem it solves is a property of hand-offs, not of any particular
+intelligence running at each node. LLMs are welcome. They are not the variable.
+
 ---
 
 ## The precise claim

@@ -456,7 +456,19 @@ python -m pact_ax.mcp.server
 
 ## Demos
 
-All runnable demos live in **[neurobloomai/pact-demos](https://github.com/neurobloomai/pact-demos)**:
+**Quickest entry point** — a self-contained podcast demo, no server needed:
+
+```bash
+git clone https://github.com/neurobloomai/pact-ax-demo
+cd pact-ax-demo
+python run_demo.py
+```
+
+Shows a 4-agent chain (Planner → Researcher → Writer → Publisher) where intent
+degrades hop by hop without PACT (3→2→1→1 constraints surviving) and travels
+intact with PACT (4→4→4→4). No API keys. No network calls.
+
+All full demos live in **[neurobloomai/pact-demos](https://github.com/neurobloomai/pact-demos)**:
 
 ```bash
 git clone https://github.com/neurobloomai/pact-demos

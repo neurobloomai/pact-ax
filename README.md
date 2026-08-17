@@ -35,6 +35,17 @@ if decision.routed:
 
 ---
 
+## Ecosystem
+
+| Package | What it solves |
+|---|---|
+| **[pact-ax](https://github.com/neurobloomai/pact-ax)** | Trust, routing, handoff, memory — the collaboration layer |
+| **[pact-ax-client](https://github.com/neurobloomai/pact-ax-client)** | Python SDK for pact-ax (`pip install pact-ax-client`) |
+| **[pact-a2a](https://github.com/neurobloomai/pact-a2a)** | Intent-fidelity adapter for A2A 1.0 task handoffs — `origin_intent` referenced never reconstructed, `scope_deltas` per hop, `verify_chain` catches undeclared scope mutation independent of Agent Card signatures. *Authorization is solved. Fidelity isn't.* |
+| **[pact-demos](https://github.com/neurobloomai/pact-demos)** | End-to-end demos across all primitives |
+
+---
+
 ## The gap nobody named
 
 The industry is solving token delegation — a signed credential at initialization, a binary check at T=0. That's authentication dressed as trust. A snapshot.
@@ -509,6 +520,7 @@ pytest tests/integration/ -v             # integration only
 - DeadLetterQueue — enqueue, retry, exhaustion, exponential backoff
 - REST API — 84 routes across all primitives
 - **pact-ax-client** — Python SDK on PyPI (`pip install pact-ax-client`)
+- **pact-a2a** — Intent-fidelity layer for A2A 1.0; `origin_intent` + `scope_deltas` + `verify_chain`; 21 tests; MIT; [`pip install pact-a2a`](https://github.com/neurobloomai/pact-a2a)
 - Docker — `docker compose up` one-command start; `./data/` volume for SQLite persistence
 
 ### 🎯 Next
